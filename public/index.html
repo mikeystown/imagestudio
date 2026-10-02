@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Image Studio</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --border: #e2e1dc;
+    --accent: #3d5afe; --accent-text: #fff; --danger: #c62828; --input: #fbfbfa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1e1e1c; --text: #ecebe6; --muted: #9a9993; --border: #33332f;
+      --accent: #7b8cff; --accent-text: #0d0d0c; --danger: #ef6b6b; --input: #262624;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  .app { display: grid; grid-template-columns: 360px 1fr; gap: 16px; padding: 16px; min-height: 100vh; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  aside.panel { display: flex; flex-direction: column; gap: 14px; align-self: start; position: sticky; top: 16px; }
+  h1 { font-size: 16px; margin: 0; }
+  label.field { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 12px; color: var(--muted); }
+  select, input, textarea, button { font: inherit; color: var(--text); }
+  select, input[type=number], input[type=text], textarea {
+    background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; width: 100%;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .desc { font-size: 12px; color: var(--muted); margin: 0; }
+  button { border: 1px solid var(--border); background: var(--input); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; padding: 11px; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 7px 12px; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
+  .error { color: var(--danger); white-space: pre-wrap; font-size: 13px; }
+  .refs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .refs div { position: relative; }
+  .refs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+  .refs button { position: absolute; top: -6px; right: -6px; padding: 0 6px; font-size: 11px; border-radius: 99px; }
+  main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .viewer { display: grid; place-items: center; min-height: 420px; }
+  .viewer img { max-width: 100%; max-height: 72vh; border-radius: 8px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .history { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+  .history figure { margin: 0; cursor: pointer; }
+  .history img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; border: 2px solid transparent; }
+  .history figure.sel img { border-color: var(--accent); }
+  .history figcaption { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spinner { width: 28px; height: 28px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="panel">
+    <h1>Image Studio · OpenRouter</h1>
+
+    <label class="field">Model
+      <select id="model"><option>Loading models…</option></select>
+    </label>
+    <p class="desc" id="modelDesc"></p>
+
+    <label class="field">Prompt
+      <textarea id="prompt" placeholder="Describe the image… (Ctrl+Enter to generate)"></textarea>
+    </label>
+
+    <div id="params" class="grid2"></div>
+
+    <div id="seedBox">
+      <label class="field">Seed</label>
+      <div class="row" style="margin-top:5px">
+        <div class="seg">
+          <button type="button" data-mode="random" class="on">Random</button>
+          <button type="button" data-mode="fixed">Fixed</button>
+        </div>
+        <input id="seed" type="number" min="0" max="2147483647" step="1" placeholder="auto" disabled />
+        <button type="button" id="roll" title="Pick a new random seed">🎲</button>
+      </div>
+      <p class="desc" id="seedNote" style="margin-top:5px">A new random seed is picked for each run and recorded so you can reuse it.</p>
+    </div>
+
+    <div id="refBox" class="hidden">
+      <label class="field">Reference images <span id="refLimit"></span></label>
+      <input id="refInput" type="file" accept="image/*" multiple style="margin-top:5px" />
+      <div class="refs" id="refs" style="margin-top:6px"></div>
+    </div>
+
+    <button class="primary" id="go">Generate</button>
+    <div class="error" id="error"></div>
+  </aside>
+
+  <main>
+    <section class="panel">
+      <div class="viewer" id="viewer"><p class="desc">Your image will appear here.</p></div>
+      <div class="meta" id="meta"></div>
+    </section>
+    <section class="panel">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h1>History</h1>
+        <button type="button" id="clearHistory">Clear list</button>
+      </div>
+      <div class="history" id="history"><p class="desc">Nothing yet. Images are saved to <code>outputs/</code>.</p></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const MAX_SEED = 2147483647;
+const DEFAULT_MODEL = "bytedance-seed/seedream-5-0-pro";
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+let models = [];
+let seedMode = "random";
+let refs = []; // data URLs
+let history = store.get("history", []);
+let selected = null;
+
+const randomSeed = () => crypto.getRandomValues(new Uint32Array(1))[0] % (MAX_SEED + 1);
+const currentModel = () => models.find((m) => m.id === $("model").value);
+
+// ---------- models ----------
+async function loadModels() {
+  try {
+    const r = await fetch("/api/models");
+    const body = await r.json();
+    if (!r.ok) throw new Error(body?.error?.message || r.statusText);
+    models = (body.data || []).filter((m) => m.architecture?.output_modalities?.includes("image"));
+    models.sort((a, b) => a.name.localeCompare(b.name));
+    $("model").innerHTML = models.map((m) => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("");
+    const saved = store.get("model", DEFAULT_MODEL);
+    $("model").value = models.some((m) => m.id === saved) ? saved : models.some((m) => m.id === DEFAULT_MODEL) ? DEFAULT_MODEL : models[0]?.id;
+    renderParams();
+  } catch (e) {
+    $("model").innerHTML = "<option>Failed to load</option>";
+    $("error").textContent = "Could not load models: " + e.message;
+  }
+}
+
+// Build controls from the model's advertised supported_parameters.
+function renderParams() {
+  const m = currentModel();
+  if (!m) return;
+  store.set("model", m.id);
+  $("modelDesc").textContent = m.description || "";
+  const sp = m.supported_parameters || {};
+  const savedParams = store.get("params:" + m.id, {});
+  const html = [];
+
+  for (const [key, spec] of Object.entries(sp)) {
+    if (key === "seed" || key === "input_references") continue;
+    const label = key.replace(/_/g, " ");
+    if (spec.type === "enum") {
+      const opts = ['<option value="">default</option>']
+        .concat(spec.values.map((v) => `<option ${savedParams[key] === v ? "selected" : ""}>${escapeHtml(v)}</option>`));
+      html.push(`<label class="field">${label}<select data-param="${key}">${opts.join("")}</select></label>`);
+    } else if (spec.type === "range") {
+      if (spec.min === spec.max) continue; // nothing to choose (e.g. n: 1-1)
+      html.push(`<label class="field">${label} (${spec.min}–${spec.max})<input type="number" data-param="${key}" data-num min="${spec.min}" max="${spec.max}" step="1" placeholder="default" value="${savedParams[key] ?? ""}"></label>`);
+    } else {
+      // Free-form parameter (e.g. "size"); sent as text, or as a number if it parses as one.
+      html.push(`<label class="field">${label}<input type="text" data-param="${key}" placeholder="default" value="${escapeHtml(savedParams[key] ?? "")}"></label>`);
+    }
+  }
+  $("params").innerHTML = html.join("");
+
+  const seedOk = !!sp.seed;
+  $("seedBox").style.opacity = seedOk ? 1 : 0.5;
+  $("seedBox").querySelectorAll("button,input").forEach((el) => (el.disabled = !seedOk || (el.id === "seed" && seedMode === "random")));
+  $("seedNote").textContent = seedOk
+    ? seedMode === "random"
+      ? "A new random seed is picked for each run and recorded so you can reuse it."
+      : "This exact seed is sent every run. Determinism depends on the provider."
+    : "This model doesn't accept a seed parameter.";
+
+  const refSpec = sp.input_references;
+  $("refBox").classList.toggle("hidden", !refSpec);
+  if (refSpec) {
+    $("refLimit").textContent = `(${refSpec.min ? "required, " : ""}up to ${refSpec.max})`;
+    refs = refs.slice(0, refSpec.max);
+    renderRefs();
+  }
+}
+
+function collectParams() {
+  const out = {};
+  document.querySelectorAll("[data-param]").forEach((el) => {
+    const v = el.value.trim();
+    if (v === "") return;
+    out[el.dataset.param] = el.dataset.num !== undefined || /^\d+$/.test(v) ? Number(v) : v;
+  });
+  return out;
+}
+
+// ---------- seed ----------
+function setSeedMode(mode) {
+  seedMode = mode;
+  document.querySelectorAll(".seg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  if (mode === "fixed" && $("seed").value === "") $("seed").value = randomSeed();
+  renderParams();
+}
+document.querySelectorAll(".seg button").forEach((b) => (b.onclick = () => setSeedMode(b.dataset.mode)));
+$("roll").onclick = () => { $("seed").value = randomSeed(); if (seedMode === "random") setSeedMode("fixed"); };
+
+// ---------- reference images ----------
+$("refInput").onchange = async (e) => {
+  const max = currentModel()?.supported_parameters?.input_references?.max ?? 0;
+  for (const file of e.target.files) {
+    if (refs.length >= max) break;
+    refs.push(await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(file); }));
+  }
+  e.target.value = "";
+  renderRefs();
+};
+function renderRefs() {
+  $("refs").innerHTML = refs.map((src, i) => `<div><img src="${src}"><button type="button" data-i="${i}">×</button></div>`).join("");
+  $("refs").querySelectorAll("button").forEach((b) => (b.onclick = () => { refs.splice(+b.dataset.i, 1); renderRefs(); }));
+}
+
+// ---------- generate ----------
+async function generate() {
+  const m = currentModel();
+  const prompt = $("prompt").value.trim();
+  $("error").textContent = "";
+  if (!m) return;
+  if (!prompt) return ($("error").textContent = "Enter a prompt.");
+
+  const params = collectParams();
+  store.set("params:" + m.id, params);
+  const payload = { model: m.id, prompt, ...params };
+
+  if (m.supported_parameters?.seed) {
+    if (seedMode === "fixed") {
+      const s = Number($("seed").value);
+      if (!Number.isInteger(s) || s < 0 || s > MAX_SEED) return ($("error").textContent = `Seed must be an integer 0–${MAX_SEED}.`);
+      payload.seed = s;
+    } else {
+      payload.seed = randomSeed();
+    }
+  }
+  if (refs.length) payload.input_references = refs.map((url) => ({ type: "image_url", image_url: { url } }));
+  const refMin = m.supported_parameters?.input_references?.min || 0;
+  if (refs.length < refMin) return ($("error").textContent = `This model needs at least ${refMin} reference image(s).`);
+
+  $("go").disabled = true;
+  $("go").textContent = "Generating…";
+  $("viewer").innerHTML = '<div class="spinner"></div>';
+  $("meta").innerHTML = "";
+  try {
+    const r = await fetch("/api/images", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const body = await r.json();
+    if (!r.ok) throw new Error(`${r.status}: ${body?.error?.message || r.statusText}`);
+    if (!body.saved?.length) throw new Error("No image returned.");
+    const entries = body.saved.map((file) => ({
+      file, model: m.id, modelName: m.name, prompt, params, seed: payload.seed ?? null,
+      refs: refs.length, cost: body.usage?.cost, ms: body.ms, at: Date.now(),
+    }));
+    history = entries.concat(history).slice(0, 200);
+    store.set("history", history);
+    show(entries[0]);
+  } catch (e) {
+    $("error").textContent = e.message;
+    $("viewer").innerHTML = '<p class="desc">Generation failed.</p>';
+  } finally {
+    $("go").disabled = false;
+    $("go").textContent = "Generate";
+  }
+}
+$("go").onclick = generate;
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) generate(); });
+
+// ---------- viewer & history ----------
+function show(entry) {
+  selected = entry;
+  const src = "/outputs/" + encodeURIComponent(entry.file);
+  $("viewer").innerHTML = `<a href="${src}" target="_blank"><img src="${src}" alt=""></a>`;
+  const p = Object.entries(entry.params || {}).map(([k, v]) => `<span>${k}: <b>${escapeHtml(String(v))}</b></span>`).join("");
+  $("meta").innerHTML = `
+    <span>model: <b>${escapeHtml(entry.modelName || entry.model)}</b></span>
+    <span>seed: <b>${entry.seed ?? "—"}</b></span>
+    ${p}
+    ${entry.cost != null ? `<span>cost: <b>$${Number(entry.cost).toFixed(4)}</b></span>` : ""}
+    ${entry.ms ? `<span>time: <b>${(entry.ms / 1000).toFixed(1)}s</b></span>` : ""}
+    <span style="flex-basis:100%">${escapeHtml(entry.prompt)}</span>
+    <span class="row" style="flex-basis:100%">
+      <button type="button" id="reuseAll">Reuse settings + seed</button>
+      <button type="button" id="reuseSeed" ${entry.seed == null ? "disabled" : ""}>Reuse seed only</button>
+      <a href="${src}" download><button type="button">Download</button></a>
+    </span>`;
+  $("reuseSeed").onclick = () => { $("seed").value = entry.seed; setSeedMode("fixed"); };
+  $("reuseAll").onclick = () => reuse(entry);
+  renderHistory();
+}
+
+function reuse(entry) {
+  if (models.some((m) => m.id === entry.model)) $("model").value = entry.model;
+  store.set("params:" + entry.model, entry.params || {});
+  $("prompt").value = entry.prompt;
+  renderParams();
+  if (entry.seed != null) { $("seed").value = entry.seed; setSeedMode("fixed"); }
+}
+
+function renderHistory() {
+  if (!history.length) {
+    $("history").innerHTML = '<p class="desc">Nothing yet. Images are saved to <code>outputs/</code>.</p>';
+    return;
+  }
+  $("history").innerHTML = history.map((h, i) => `
+    <figure data-i="${i}" class="${selected?.file === h.file ? "sel" : ""}">
+      <img loading="lazy" src="/outputs/${encodeURIComponent(h.file)}" alt="">
+      <figcaption>seed ${h.seed ?? "—"} · ${escapeHtml(h.prompt)}</figcaption>
+    </figure>`).join("");
+  $("history").querySelectorAll("figure").forEach((f) => (f.onclick = () => show(history[+f.dataset.i])));
+}
+$("clearHistory").onclick = () => { history = []; store.set("history", history); renderHistory(); };
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+$("model").onchange = renderParams;
+renderHistory();
+loadModels();
+</script>
+</body>
+</html>

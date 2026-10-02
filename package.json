@@ -1,0 +1,6 @@
+{
+  "name": "openrouter-image-studio",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.js" }
+}
