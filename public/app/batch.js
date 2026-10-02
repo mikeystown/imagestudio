@@ -3,7 +3,7 @@
 import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, MAX_SEED, DEFAULT_MODEL } from "./util.js";
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
 import { commonEnumValues, estimateImageCost } from "../lib/params.js";
-import { defaultPoolSet, REQUIRED_PHRASE } from "../lib/defaults.js";
+import { defaultPoolSet } from "../lib/defaults.js";
 
 let set = store.get("batch:set", null) || defaultPoolSet(); // { template, pools: {slot: [{value, weight}]}, locks: {slot: value} }
 let cfg = {
@@ -16,7 +16,6 @@ let selectedCaps = []; // capabilities of cfg.models, same order
 const saveSet = () => store.set("batch:set", set);
 const saveCfg = () => store.set("batch:cfg", cfg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const hasAdultPhrase = (text) => String(text).toLowerCase().includes(REQUIRED_PHRASE);
 
 export function initBatch() {
   cfg.models = cfg.models.filter((id) => state.models.some((m) => m.id === id));
@@ -47,7 +46,6 @@ function renderTemplateInfo() {
   const { prompt, missing } = buildPrompt(set.template, set.pools, set.locks);
   const unused = Object.keys(set.pools).filter((s) => !slots.includes(s));
   const notes = [];
-  if (!hasAdultPhrase(set.template)) notes.push(`<span class="warn">⚠ The template must contain “${REQUIRED_PHRASE}”. Batches won't run without it.</span>`);
   if (missing.length) notes.push(`<span class="warn">No options for: ${missing.map((s) => `{${escapeHtml(s)}}`).join(", ")}</span>`);
   if (unused.length) notes.push(`Pools not used by the template: ${unused.map(escapeHtml).join(", ")}`);
   notes.push(`${slots.length} slot(s): ${slots.map((s) => `{${escapeHtml(s)}}`).join(" ") || "none"}`);
@@ -334,7 +332,6 @@ export async function postImage(payload) {
 
 async function runBatch() {
   const problems = [];
-  if (!hasAdultPhrase(set.template)) problems.push(`The template must contain “${REQUIRED_PHRASE}”.`);
   const { missing } = buildPrompt(set.template, set.pools, set.locks);
   if (missing.length) problems.push(`No options for ${missing.map((s) => `{${s}}`).join(", ")}.`);
   if (!cfg.models.length) problems.push("Select at least one model.");

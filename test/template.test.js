@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findSlots, pickOption, fillTemplate, buildPrompt, normalizeOptions } from "../public/lib/template.js";
-import { DEFAULT_TEMPLATE, DEFAULT_POOLS, REQUIRED_PHRASE } from "../public/lib/defaults.js";
+import { DEFAULT_TEMPLATE, DEFAULT_POOLS } from "../public/lib/defaults.js";
 
 // Deterministic RNG returning the given values in turn.
 const seq = (...xs) => { let i = 0; return () => xs[i++ % xs.length]; };
@@ -71,7 +71,6 @@ test("buildPrompt reports slots with no pool and leaves them unfilled", () => {
 test("default template is fully covered by default pools and keeps the adult wording", () => {
   assert.deepEqual(findSlots(DEFAULT_TEMPLATE).sort(), Object.keys(DEFAULT_POOLS).sort());
   assert.ok(DEFAULT_TEMPLATE.includes("adult woman in her mid-twenties"));
-  assert.ok(DEFAULT_TEMPLATE.includes(REQUIRED_PHRASE));
   const r = buildPrompt(DEFAULT_TEMPLATE, DEFAULT_POOLS, {}, () => 0);
   assert.deepEqual(r.missing, []);
   assert.ok(!/\{\w+\}/.test(r.prompt));

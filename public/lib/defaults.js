@@ -1,8 +1,5 @@
 // Default template and slot pools the app starts with.
 
-// Batch runs refuse templates that drop this phrase, so every image describes an adult.
-export const REQUIRED_PHRASE = "adult woman";
-
 export const DEFAULT_TEMPLATE =
   "Candid phone photo of {name}, a naturally pretty adult woman in her mid-twenties with a natural, girl-next-door look, " +
   "photographed casually by a friend. Soft, slim oval face with gentle, unexaggerated features: {eyes}, {nose}, {lips}, {brows}. " +

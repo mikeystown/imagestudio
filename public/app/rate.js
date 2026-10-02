@@ -2,7 +2,6 @@
 
 import { $, store, state, api, getCaps, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, typingInField, randomSeed, loadLibrary, MAX_SEED } from "./util.js";
 import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
-import { REQUIRED_PHRASE } from "../lib/defaults.js";
 import { postImage } from "./batch.js";
 
 const KINDS = ["batch", "single", "reproduce", "reference", "blend"];
@@ -357,7 +356,7 @@ $("dlgGo").onclick = async () => {
   const { kind, recs } = action;
   const model = $("dlgModel").value;
   const prompt = $("dlgPrompt").value.trim();
-  if (!prompt.toLowerCase().includes(REQUIRED_PHRASE)) return ($("dlgError").textContent = `The prompt must describe an “${REQUIRED_PHRASE}”.`);
+  if (!prompt) return ($("dlgError").textContent = "Enter a prompt.");
   const sp = (await getCaps(model).catch(() => ({}))).supported_parameters || {};
   const payload = { model, prompt, app: { kind, parent: kind === "blend" ? recs.map((r) => r.file) : recs[0].file } };
   if (kind !== "reproduce") payload.ref_files = recs.map((r) => r.file);
