@@ -13,7 +13,10 @@ import { openLightbox, lightboxOpen } from "./lightbox.js";
 // perGroup: keep only the best N images of each group (0 = all). The chosen finalists are saved in
 // `finalists` and stay fixed (final-round picks would otherwise reshuffle who qualifies) until the filters
 // change or they are re-picked.
-let opts = { group: "", batch: "", minScore: 6, perGroup: 0, target: 10, view: "compare", ...store.get("compare:opts", {}) };
+// groups: group ids to compare; empty = all groups.
+let opts = { groups: [], batch: "", minScore: 6, perGroup: 0, target: 10, view: "compare", ...store.get("compare:opts", {}) };
+if (typeof opts.group === "string") opts.groups = opts.group ? [opts.group] : opts.groups; // single-group setting from before
+delete opts.group;
 opts.finalists = { key: "", files: [], ...opts.finalists };
 opts.mix = { from: "", count: 12, same: false, files: [], mainFiles: [], ...opts.mix };
 const saveOpts = () => store.set("compare:opts", opts);
@@ -30,6 +33,7 @@ let busy = false;
 let sessionPicks = 0;
 
 let ready = false; // set once startup data (library, comparisons, groups) has loaded
+const inGroups = (r) => !opts.groups.length || opts.groups.includes(r.group_id);
 const isActive = () => ready && !$("tab-compare").classList.contains("hidden");
 
 export function initCompare() {
@@ -46,10 +50,12 @@ export function initCompare() {
 
 // ---------- the image set ----------
 function renderFilters() {
-  if (opts.group && !isKnownGroup(opts.group)) opts.group = "";
-  $("cGroup").innerHTML = [["", "All groups"], ...groupList().map((g) => [g.id, g.name])]
-    .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.group ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
-  const runs = listBatches(state.library.filter((r) => !opts.group || r.group_id === opts.group));
+  opts.groups = opts.groups.filter((id) => isKnownGroup(id));
+  $("cGroupsMenu").innerHTML =
+    `<label class="check"><input type="checkbox" data-all ${opts.groups.length ? "" : "checked"}> All groups</label>` +
+    groupList().map((g) => `<label class="check"><input type="checkbox" value="${escapeHtml(g.id)}" ${opts.groups.includes(g.id) ? "checked" : ""}> ${escapeHtml(g.name)}</label>`).join("");
+  $("cGroupsLabel").textContent = opts.groups.length ? opts.groups.map(groupName).join(" + ") : "All groups";
+  const runs = listBatches(state.library.filter(inGroups));
   if (opts.batch && !runs.some((b) => b.id === opts.batch)) opts.batch = "";
   $("cBatch").innerHTML = [["", "All runs"], ...runs.map((b) => [b.id, `${b.name ? b.name + " · " : ""}${b.id.slice(0, 16).replace("T", " ")} · ${b.count} images`])]
     .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.batch ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
@@ -58,7 +64,7 @@ function renderFilters() {
 function renderMixOptions() {
   const m = opts.mix;
   if (m.from && m.from !== "*" && !isKnownGroup(m.from)) m.from = "";
-  $("cMixFrom").innerHTML = [["", "nothing"], ["*", "7s from other groups"], ...groupList().filter((g) => g.id !== opts.group).map((g) => [g.id, `7s from ${g.name}`])]
+  $("cMixFrom").innerHTML = [["", "nothing"], ["*", "7s from other groups"], ...groupList().filter((g) => !opts.groups.includes(g.id)).map((g) => [g.id, `7s from ${g.name}`])]
     .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === m.from ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
   for (const id of ["cMixCount", "cMixSame", "cResample"]) $(id).disabled = !m.from;
 }
@@ -66,10 +72,10 @@ function renderMixOptions() {
 // Files matching the group / run / rating filters, before any sampling.
 function selectionFiles() {
   const recs = state.library
-    .filter((r) => (!opts.group || r.group_id === opts.group) && (!opts.batch || r.batch_id === opts.batch))
+    .filter((r) => inGroups(r) && (!opts.batch || r.batch_id === opts.batch))
     .filter((r) => opts.minScore === 0 || (isRated(r) && scoreOf(r) >= opts.minScore));
   if (!(opts.perGroup > 0)) return recs.map((r) => r.file);
-  const key = JSON.stringify([opts.group, opts.batch, opts.minScore, opts.perGroup]);
+  const key = JSON.stringify([opts.groups, opts.batch, opts.minScore, opts.perGroup]);
   if (opts.finalists.key !== key) {
     opts.finalists = { key, files: topPerGroup(recs, opts.perGroup) };
     saveOpts();
@@ -115,7 +121,7 @@ function resample() {
   const inSelection = new Set(selection);
   const pool = state.library
     .filter((r) => isRated(r) && scoreOf(r) === 7 && !inSelection.has(r.file))
-    .filter((r) => (m.from === "*" ? r.group_id !== opts.group : r.group_id === m.from))
+    .filter((r) => (m.from === "*" ? !inGroups(r) : r.group_id === m.from))
     .map((r) => r.file);
   m.files = m.from ? sample(pool, m.count) : [];
   m.mainFiles = m.from && m.same ? sample(selection, m.count) : [];
@@ -156,10 +162,29 @@ function rebuild() {
   if (opts.view === "ranking") renderRanking();
 }
 
-for (const [id, key] of [["cGroup", "group"], ["cBatch", "batch"], ["cMin", "minScore"]]) {
+// Groups dropdown: tick any number of groups; "All groups" clears the selection.
+$("cGroupsMenu").addEventListener("change", (e) => {
+  const box = e.target;
+  if (box.dataset.all !== undefined) opts.groups = [];
+  else {
+    const chosen = new Set(opts.groups);
+    if (box.checked) chosen.add(box.value);
+    else chosen.delete(box.value);
+    opts.groups = groupList().map((g) => g.id).filter((id) => chosen.has(id)); // keep group order
+  }
+  opts.batch = "";
+  saveOpts();
+  if (opts.mix.from) resample();
+  pair = null;
+  rebuild();
+});
+document.addEventListener("click", (e) => {
+  if ($("cGroups").open && !$("cGroups").contains(e.target)) $("cGroups").open = false;
+});
+
+for (const [id, key] of [["cBatch", "batch"], ["cMin", "minScore"]]) {
   $(id).onchange = () => {
     opts[key] = key === "minScore" ? Number($(id).value) : $(id).value;
-    if (key === "group") opts.batch = "";
     saveOpts();
     if (opts.mix.from) resample(); // new selection, new mix
     pair = null;

@@ -138,6 +138,11 @@
   .bar { height: 8px; border-radius: 99px; background: var(--accent); }
 
   /* compare */
+  .multi { position: relative; }
+  .multi summary { list-style: none; cursor: pointer; background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; white-space: nowrap; }
+  .multi summary::-webkit-details-marker { display: none; }
+  .multi summary::after { content: " ▾"; color: var(--muted); }
+  .multi .menu { position: absolute; z-index: 15; top: calc(100% + 4px); left: 0; min-width: 200px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px; box-shadow: 0 6px 24px #0005; }
   /* position: relative keeps the "no pair" message inside the arena instead of covering the whole page */
   .arena { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; height: calc(100vh - 215px); min-height: 320px; }
   .arena figure { margin: 0; position: relative; background: var(--panel); border: 2px solid var(--border); border-radius: 12px; overflow: hidden; cursor: pointer; transition: border-color .12s; }
@@ -348,7 +353,10 @@
 <!-- ================= Compare ================= -->
 <section id="tab-compare" class="tab hidden">
   <div class="panel toolbar">
-    <select id="cGroup" title="Group"></select>
+    <details class="multi" id="cGroups" title="Groups to compare (none ticked = all)">
+      <summary id="cGroupsLabel">All groups</summary>
+      <div class="menu" id="cGroupsMenu"></div>
+    </details>
     <select id="cBatch" title="Run within the group"></select>
     <label class="row desc">Rated at least <select id="cMin" style="width:auto"></select></label>
     <label class="row" style="font-weight:600" title="Keep only the best N of each group: by comparison score where the group has been compared, else by rating. Leave empty for every image.">Finalists: top <input type="number" id="cPerGroup" min="0" max="500" step="1" placeholder="all" style="width:64px"> per group</label>
