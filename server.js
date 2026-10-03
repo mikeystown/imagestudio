@@ -412,7 +412,9 @@ async function serveStatic(req, res) {
   if (!file.startsWith(base + path.sep)) return sendJson(res, 403, { error: { message: "Forbidden" } });
   try {
     const data = await fs.readFile(file);
-    res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
+    // App files must always be re-checked so an update shows on reload; generated images never change.
+    const cache = base === OUTPUT_DIR ? "private, max-age=31536000, immutable" : "no-cache";
+    res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream", "Cache-Control": cache });
     res.end(data);
   } catch {
     sendJson(res, 404, { error: { message: "Not found" } });

@@ -10,8 +10,11 @@ import { openLightbox, lightboxOpen } from "./lightbox.js";
 // minScore 0 = any image, including unrated.
 // mix: blend in a fixed random sample of 7s from elsewhere. from: "" off, "*" other groups, or a group id.
 // files / mainFiles hold the drawn samples so the set stays the same across reloads until Resample.
-// perGroup: keep only the best N images of each group (0 = all).
+// perGroup: keep only the best N images of each group (0 = all). The chosen finalists are saved in
+// `finalists` and stay fixed (final-round picks would otherwise reshuffle who qualifies) until the filters
+// change or they are re-picked.
 let opts = { group: "", batch: "", minScore: 6, perGroup: 0, target: 10, view: "compare", ...store.get("compare:opts", {}) };
+opts.finalists = { key: "", files: [], ...opts.finalists };
 opts.mix = { from: "", count: 12, same: false, files: [], mainFiles: [], ...opts.mix };
 const saveOpts = () => store.set("compare:opts", opts);
 const sessionId = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`; // one per app load
@@ -26,9 +29,11 @@ let lastKey = null;
 let busy = false;
 let sessionPicks = 0;
 
-const isActive = () => !$("tab-compare").classList.contains("hidden");
+let ready = false; // set once startup data (library, comparisons, groups) has loaded
+const isActive = () => ready && !$("tab-compare").classList.contains("hidden");
 
 export function initCompare() {
+  ready = true;
   $("cTarget").value = opts.target;
   $("cPerGroup").value = opts.perGroup || "";
   $("cMin").innerHTML = `<option value="0" ${opts.minScore === 0 ? "selected" : ""}>Any (incl. unrated)</option>` +
@@ -63,7 +68,14 @@ function selectionFiles() {
   const recs = state.library
     .filter((r) => (!opts.group || r.group_id === opts.group) && (!opts.batch || r.batch_id === opts.batch))
     .filter((r) => opts.minScore === 0 || (isRated(r) && scoreOf(r) >= opts.minScore));
-  return opts.perGroup > 0 ? topPerGroup(recs, opts.perGroup) : recs.map((r) => r.file);
+  if (!(opts.perGroup > 0)) return recs.map((r) => r.file);
+  const key = JSON.stringify([opts.group, opts.batch, opts.minScore, opts.perGroup]);
+  if (opts.finalists.key !== key) {
+    opts.finalists = { key, files: topPerGroup(recs, opts.perGroup) };
+    saveOpts();
+  }
+  const exists = new Set(state.library.map((r) => r.file));
+  return opts.finalists.files.filter((f) => exists.has(f));
 }
 
 // Stable pseudo-random order for ties, so the chosen set doesn't change between reloads.
@@ -133,7 +145,8 @@ function rebuild() {
   renderFilters();
   renderMixOptions();
   computeSet();
-  $("cSetInfo").textContent = `${files.length} image(s) in set${opts.perGroup > 0 ? ` (top ${opts.perGroup} per group)` : ""}`;
+  $("cSetInfo").textContent = `${files.length} image(s) in set${opts.perGroup > 0 ? ` (top ${opts.perGroup} per group, fixed)` : ""}`;
+  $("cRepick").disabled = !(opts.perGroup > 0);
   $("cMixInfo").textContent = !opts.mix.from ? ""
     : anchorSet.size ? `${mainSet.size} from this selection + ${anchorSet.size} mixed-in 7s, shown blind`
     : "No 7s found outside this selection: pick a group, or another source.";
@@ -174,6 +187,13 @@ $("cPerGroup").onchange = () => {
   if (opts.mix.from) resample();
   pair = null;
   rebuild();
+};
+$("cRepick").onclick = () => {
+  opts.finalists.key = ""; // forces a fresh choice from current scores
+  if (opts.mix.from) resample();
+  pair = null;
+  rebuild();
+  toast("Finalists re-picked from the current scores.");
 };
 $("cTarget").oninput = () => {
   opts.target = Math.max(1, Math.min(200, Number($("cTarget").value) || 1));
@@ -389,4 +409,4 @@ document.querySelectorAll("#cView button").forEach((b) => (b.onclick = () => set
 on("ratings", () => isActive() && !busy && rebuild());
 on("library", () => isActive() && !busy && rebuild());
 on("groups", () => isActive() && renderFilters());
-on("tab-shown", (name) => name === "compare" && rebuild());
+on("tab-shown", (name) => ready && name === "compare" && rebuild());
