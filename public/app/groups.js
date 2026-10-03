@@ -52,6 +52,9 @@ export function createGroup() {
     template: from.template,
     pools: structuredClone(from.pools),
     locks: structuredClone(from.locks || {}),
+    refMode: !!from.refMode,
+    refTemplate: from.refTemplate,
+    refs: [...(from.refs || [])],
   };
   state.groups.groups.push(g);
   state.groups.active = g.id;

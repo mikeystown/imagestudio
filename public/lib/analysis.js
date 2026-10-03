@@ -93,7 +93,7 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map(), com
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
-    "rating_1_7", "rating_label", "tags", "notes", "starred", "kind", "group", "batch_id", "batch_name", "parent", "template", "prompt",
+    "rating_1_7", "rating_label", "tags", "notes", "starred", "kind", "group", "batch_id", "batch_name", "parent", "references", "template", "prompt",
     "bt_score", "bt_se", "n_comparisons",
     "compare_rank", "compare_cluster", "compare_score", "compare_se", "compare_n",
     ...slots.map((s) => `slot_${s}`),
@@ -101,7 +101,7 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map(), com
   const rows = records.map((r) => [
     r.file, r.created_at, r.model, r.seed, r.resolution, r.aspect_ratio, r.cost,
     isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "",
-    (r.rating?.tags || []).join("; "), r.rating?.notes, starred(r.file), r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
+    (r.rating?.tags || []).join("; "), r.rating?.notes, starred(r.file), r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.parent, (r.references || []).join("; "), r.template, r.prompt,
     bt.get(r.file)?.score?.toFixed(4), bt.get(r.file)?.se?.toFixed(4), bt.get(r.file)?.n ?? 0,
     ...compareCells(compare.get(r.file)),
     ...slots.map((s) => r.picks?.[s]),
@@ -119,7 +119,7 @@ export function comparisonsCSV(comps, { byFile, groupName = (id) => id, bt = new
   const slots = [...new Set(rows.flatMap((c) => [c.image_a, c.image_b]).flatMap((f) => Object.keys(byFile.get(f).picks || {})))].sort();
   const sideHeader = (s) => [
     `${s}_file`, `${s}_position`, `${s}_group`, `${s}_run`, `${s}_model`, `${s}_seed`, `${s}_rating_1_7`, `${s}_rating_label`, `${s}_tags`, `${s}_starred`,
-    `${s}_bt_score`, `${s}_compare_rank`, `${s}_compare_cluster`, `${s}_compare_score`, `${s}_prompt`,
+    `${s}_bt_score`, `${s}_compare_rank`, `${s}_compare_cluster`, `${s}_compare_score`, `${s}_references`, `${s}_prompt`,
     ...slots.map((x) => `${s}_slot_${x}`),
   ];
   const header = [
@@ -132,7 +132,7 @@ export function comparisonsCSV(comps, { byFile, groupName = (id) => id, bt = new
     return [
       r.file, c.shown_left === s ? "left" : "right", groupName(r.group_id), r.batch_name || r.batch_id, r.model, r.seed,
       isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "", (r.rating?.tags || []).join("; "), starred(r.file),
-      bt.get(r.file)?.score?.toFixed(4), cmp?.rank, cmp?.cluster, cmp?.score?.toFixed(4), r.prompt,
+      bt.get(r.file)?.score?.toFixed(4), cmp?.rank, cmp?.cluster, cmp?.score?.toFixed(4), (r.references || []).join("; "), r.prompt,
       ...slots.map((x) => r.picks?.[x]),
     ];
   };

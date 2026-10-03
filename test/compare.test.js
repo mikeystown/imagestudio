@@ -276,3 +276,13 @@ test("exports mark starred images", () => {
   assert.equal(row[ch.indexOf("a_starred")], "false");
   assert.equal(row[ch.indexOf("b_starred")], "true");
 });
+
+test("exports list the reference images each image was made from", () => {
+  const recs = [{ file: "x.jpg", references: ["ref1.jpg", "upload-2.png"] }, { file: "y.jpg" }];
+  const [h, x, y] = imagesCSV(recs).trim().split("\r\n").map((l) => l.split(","));
+  assert.equal(x[h.indexOf("references")], "ref1.jpg; upload-2.png");
+  assert.equal(y[h.indexOf("references")], "");
+  const byFile = new Map(recs.map((r) => [r.file, { ...r, group_id: "g" }]));
+  const [ch, row] = comparisonsCSV([cmp("x.jpg", "y.jpg", "a")], { byFile }).trim().split("\r\n").map((l) => l.split(","));
+  assert.equal(row[ch.indexOf("a_references")], "ref1.jpg; upload-2.png");
+});

@@ -55,6 +55,8 @@
   .refs div { position: relative; }
   .refs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
   .refs button { position: absolute; top: -6px; right: -6px; padding: 0 6px; font-size: 11px; border-radius: 99px; }
+  .bigrefs img { width: 84px; height: 112px; cursor: zoom-in; }
+  label.btnlike { border: 1px solid var(--border); background: var(--input); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
   .refs span { position: absolute; left: 4px; top: 2px; font-weight: 700; color: #fff; text-shadow: 0 0 3px #000; }
   main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .viewer { display: grid; place-items: center; min-height: 420px; }
@@ -260,7 +262,13 @@
     </section>
     <section class="panel">
       <div class="row between wrap" style="margin-bottom:8px">
-        <h2 style="margin:0">Template</h2>
+        <span class="row">
+          <h2 style="margin:0" id="templateTitle">Template</h2>
+          <span class="seg" id="tplMode" title="Text only, or send reference images with every image in the batch">
+            <button type="button" data-mode="text" class="on">Text only</button>
+            <button type="button" data-mode="ref">With reference images</button>
+          </span>
+        </span>
         <div class="row wrap">
           <select id="poolSetSelect" style="width:auto"></select>
           <button type="button" id="poolLoad">Load</button>
@@ -273,6 +281,18 @@
       <textarea id="template" spellcheck="false"></textarea>
       <p class="desc" id="templateNote" style="margin-top:6px"></p>
       <p class="desc" style="margin-top:8px"><b>Sample:</b> <span id="preview"></span> <button type="button" id="rePreview" title="New sample" style="padding:0 6px">🎲</button></p>
+    </section>
+    <section class="panel hidden" id="refPanel">
+      <div class="row between wrap" style="margin-bottom:8px">
+        <h2 style="margin:0">Reference images</h2>
+        <span class="row">
+          <button type="button" id="refAddStarred" title="Add your ★ starred key picks">Add starred</button>
+          <label class="btnlike" title="Upload reference photos">Upload… <input type="file" id="refUpload" accept="image/png,image/jpeg,image/webp" multiple hidden></label>
+          <button type="button" id="refClear">Clear</button>
+        </span>
+      </div>
+      <div class="refs bigrefs" id="batchRefs"></div>
+      <p class="desc" id="refNote" style="margin-top:6px"></p>
     </section>
     <section class="panel">
       <div class="row between" style="margin-bottom:8px">

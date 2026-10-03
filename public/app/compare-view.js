@@ -489,6 +489,7 @@ function renderRankDetail() {
       <button type="button" data-act="star" class="${isStarred(r.f) ? "starred" : ""}" title="Save as a key pick">${isStarred(r.f) ? "★ Starred" : "☆ Star"} <kbd>c</kbd></button>
       <button type="button" data-act="full">Full size <kbd>f</kbd></button>
       <button type="button" data-act="rate" title="Open this image in the Rate tab">Show in Rate</button>
+      <button type="button" data-act="batchref" title="Add to the Batch tab's reference images (active group)">Use as batch reference</button>
       <button type="button" data-act="lock" ${picks.length ? "" : "disabled"} title="Lock these slot values in the Batch template">Use these slot values in Batch</button>
     </div>
     <p class="desc">↑/↓ (or ←/→, j/k) move through the ranking · c star · f or Space for full size.</p>`;
@@ -507,6 +508,7 @@ $("cRankDetail").addEventListener("click", (e) => {
   if (el.dataset.step) stepRank(Number(el.dataset.step));
   else if (el.dataset.act === "full") openLightbox(r.f, rankCaption(r));
   else if (el.dataset.act === "star") toggleStar(r.f);
+  else if (el.dataset.act === "batchref") emit("add-batch-ref", r.f);
   else if (el.dataset.act === "rate") emit("show-image", r.f);
   else if (el.dataset.act === "lock") { emit("lock-picks", r.rec.picks); emit("tab", "batch"); }
 });

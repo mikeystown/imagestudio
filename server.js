@@ -334,6 +334,20 @@ async function comparisons(req, res, url) {
   throw httpError(405, "Method not allowed");
 }
 
+// ---------- uploads: reference images added from disk ----------
+// Saved into outputs/ so batches can send them like any other image (ref_files). They get no sidecar,
+// so they never appear in the library, ratings or comparisons.
+const UPLOAD_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+async function upload(req, res) {
+  const { data_url } = await readJson(req);
+  const m = typeof data_url === "string" && data_url.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) throw httpError(400, "Expected a PNG, JPEG or WebP image as a base64 data URL");
+  await fs.mkdir(OUTPUT_DIR, { recursive: true });
+  const name = `upload-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.${UPLOAD_TYPES[m[1]]}`;
+  await fs.writeFile(path.join(OUTPUT_DIR, name), Buffer.from(m[2], "base64"));
+  sendJson(res, 200, { file: name });
+}
+
 // ---------- stars ("key picks"): data/stars.json ----------
 // Kept apart from image sidecars so starring never touches image records or ratings.
 async function readStars() {
@@ -381,13 +395,19 @@ async function groups(req, res) {
     if (typeof g.name !== "string" || !g.name.trim() || g.name.length > 80) throw httpError(400, "Group names must be 1–80 characters");
     if (g.template !== null && typeof g.template !== "string") throw httpError(400, "template must be a string");
     if (typeof g.pools !== "object" || !g.pools) throw httpError(400, "pools must be an object");
+    if (g.refTemplate != null && typeof g.refTemplate !== "string") throw httpError(400, "refTemplate must be a string");
+    if (g.refs != null && (!Array.isArray(g.refs) || g.refs.some((f) => !outputPath(f)))) throw httpError(400, "refs must be output image names");
     ids.add(g.id);
   }
   if (!ids.has(active)) throw httpError(400, "active must be one of the groups");
   await fs.mkdir(path.dirname(GROUPS_FILE), { recursive: true });
   await writeJsonAtomic(GROUPS_FILE, {
     active,
-    groups: list.map(({ id, name, created_at, template, pools, locks }) => ({ id, name: name.trim(), created_at, template, pools, locks: locks || {} })),
+    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs }) => ({
+      id, name: name.trim(), created_at, template, pools, locks: locks || {},
+      // Reference-image batches: their own template, whether that mode is on, and the reference files.
+      refTemplate: refTemplate ?? undefined, refMode: !!refMode, refs: refs || [],
+    })),
   });
   sendJson(res, 200, { ok: true });
 }
@@ -411,10 +431,10 @@ async function poolSets(req, res, name) {
     return sendJson(res, 200, JSON.parse(text));
   }
   if (req.method === "PUT") {
-    const { template, pools, locks } = await readJson(req);
+    const { template, pools, locks, refTemplate } = await readJson(req);
     if (typeof template !== "string" || typeof pools !== "object" || !pools) throw httpError(400, "template and pools are required");
     await fs.mkdir(POOL_DIR, { recursive: true });
-    await writeJsonAtomic(file, { template, pools, locks: locks || {}, saved_at: new Date().toISOString() });
+    await writeJsonAtomic(file, { template, refTemplate: typeof refTemplate === "string" ? refTemplate : undefined, pools, locks: locks || {}, saved_at: new Date().toISOString() });
     return sendJson(res, 200, { ok: true });
   }
   if (req.method === "DELETE") {
@@ -459,6 +479,7 @@ http
       if (req.method === "GET" && pathname === "/api/library") return await library(res);
       if (req.method === "POST" && pathname.startsWith("/api/rating/")) return await rate(req, res, tail("/api/rating/"));
       if (pathname === "/api/groups") return await groups(req, res);
+      if (req.method === "POST" && pathname === "/api/uploads") return await upload(req, res);
       if (pathname === "/api/stars" || pathname.startsWith("/api/stars/")) return await stars(req, res, tail("/api/stars/"));
       if (pathname === "/api/comparisons" || pathname === "/api/comparisons/last") return await comparisons(req, res, new URL(req.url, "http://localhost"));
       if (pathname === "/api/pool-sets" || pathname.startsWith("/api/pool-sets/")) return await poolSets(req, res, tail("/api/pool-sets/") || "");

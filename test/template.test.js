@@ -76,3 +76,12 @@ test("default template is fully covered by default pools and keeps the adult wor
   assert.ok(!/\{\w+\}/.test(r.prompt));
   assert.ok(r.prompt.startsWith("Candid phone photo of Freya, a naturally pretty adult woman"));
 });
+
+test("reference template slots are all covered by the reference pools", async () => {
+  const { DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS } = await import("../public/lib/defaults.js");
+  assert.deepEqual(findSlots(DEFAULT_REF_TEMPLATE).sort(), Object.keys(DEFAULT_REF_POOLS).sort());
+  const r = buildPrompt(DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS, {}, () => 0);
+  assert.deepEqual(r.missing, []);
+  assert.ok(r.prompt.startsWith("Use the reference image for identity only."));
+  assert.ok(r.prompt.includes("- Lighting: soft overcast daylight"));
+});

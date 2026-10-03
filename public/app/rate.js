@@ -263,6 +263,7 @@ function renderDetail() {
       <button type="button" data-act="reproduce" title="Same model, prompt and seed at a chosen resolution">Reproduce</button>
       <button type="button" data-act="star" class="${isStarred(r.file) ? "starred" : ""}" title="Save as a key pick">${isStarred(r.file) ? "★ Starred" : "☆ Star"} <kbd>c</kbd></button>
       <button type="button" data-act="reference" title="Send this image as a reference with an edit prompt">Use as reference</button>
+      <button type="button" data-act="batchref" title="Add to the Batch tab's reference images (active group)">Use as batch reference</button>
       <button type="button" data-act="blend-toggle">${blendSel.has(r.file) ? "Unselect for blend" : "Select for blend"} <kbd>x</kbd></button>
       <button type="button" data-act="lock" ${picks.length ? "" : "disabled"} title="Copy this image's slot picks into the Batch template as locked values">Lock picks</button>
       <a href="${imgSrc(r.file)}" download><button type="button">Download</button></a>
@@ -299,6 +300,7 @@ $("rateDetail").addEventListener("click", (e) => {
   if (act === "blend-toggle") { toggleBlend(r.file); renderDetail(); }
   if (act === "lock") { emit("lock-picks", r.picks); emit("tab", "batch"); }
   if (act === "star") toggleStar(r.file);
+  if (act === "batchref") emit("add-batch-ref", r.file);
 });
 
 async function saveRating(r, patch) {

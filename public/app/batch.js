@@ -3,12 +3,21 @@
 import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, MAX_SEED, DEFAULT_MODEL } from "./util.js";
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
 import { commonEnumValues, estimateImageCost } from "../lib/params.js";
-import { defaultPoolSet } from "../lib/defaults.js";
+import { defaultPoolSet, DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS } from "../lib/defaults.js";
 import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups } from "./groups.js";
+import { openLightbox } from "./lightbox.js";
 
-// The active group (groups.js): { id, name, template, pools: {slot: [{value, weight}]}, locks: {slot: value} }.
-// Edits go straight into it and are saved to the server.
+// The active group (groups.js): { id, name, template, pools: {slot: [{value, weight}]}, locks: {slot: value},
+// refMode, refTemplate, refs }. Edits go straight into it and are saved to the server.
+// In reference mode (refMode) batches send the group's reference images (refs) and use refTemplate instead of
+// template; both templates draw on the same pools.
 let set = null;
+
+const tplKey = () => (set.refMode ? "refTemplate" : "template");
+const tpl = () => set[tplKey()] ?? "";
+const setTpl = (text) => (set[tplKey()] = text);
+// Slots used by either template: pools for the other template's slots are kept, not offered for removal.
+const slotsInUse = () => new Set([...findSlots(set.template ?? ""), ...findSlots(set.refTemplate ?? "")]);
 let cfg = {
   models: [DEFAULT_MODEL], perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3,
   ...store.get("batch:cfg", {}),
@@ -24,7 +33,7 @@ export function initBatch() {
   set = activeGroup();
   renderGroupBar();
   cfg.models = cfg.models.filter((id) => state.models.some((m) => m.id === id));
-  $("template").value = set.template;
+  showMode();
   $("perModel").value = cfg.perModel;
   $("concurrency").value = cfg.concurrency;
   $("batchSeed").value = cfg.seed;
@@ -64,27 +73,115 @@ $("groupName").addEventListener("keydown", (e) => { if (e.key === "Enter") e.tar
 // Switching or creating a group swaps the template and pools being edited.
 on("groups", () => {
   set = activeGroup();
-  $("template").value = set.template;
-  renderPools();
-  renderTemplateInfo();
+  showMode();
   renderGroupBar(true);
+  renderWarnings();
 });
 on("library", () => set && renderGroupBar());
 
 // ---------- template ----------
 $("template").addEventListener("input", () => {
-  const before = findSlots(set.template).join();
-  set.template = $("template").value;
+  const before = findSlots(tpl()).join();
+  setTpl($("template").value);
   saveSet();
-  if (findSlots(set.template).join() !== before) renderPools();
+  if (findSlots(tpl()).join() !== before) renderPools();
   renderTemplateInfo();
+});
+
+// ---------- mode: text only, or with reference images ----------
+// Show the current mode's template, pools and (in reference mode) the references panel.
+function showMode() {
+  document.querySelectorAll("#tplMode button").forEach((b) => b.classList.toggle("on", (b.dataset.mode === "ref") === !!set.refMode));
+  $("refPanel").classList.toggle("hidden", !set.refMode);
+  $("templateTitle").textContent = set.refMode ? "Reference-image template" : "Template";
+  $("template").value = tpl();
+  renderPools();
+  renderTemplateInfo();
+  renderRefs();
+}
+
+function setRefMode(on) {
+  set.refMode = on;
+  if (on) ensureRefTemplate();
+  saveSet();
+  showMode();
+  renderWarnings();
+}
+
+// First switch to reference mode: start from the default reference template and add starter pools for its
+// slots, without touching pools the group already has.
+function ensureRefTemplate() {
+  if (set.refTemplate == null) set.refTemplate = DEFAULT_REF_TEMPLATE;
+  set.refs ??= [];
+  for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) if (!set.pools[slot]?.length) set.pools[slot] = structuredClone(opts);
+}
+document.querySelectorAll("#tplMode button").forEach((b) => (b.onclick = () => setRefMode(b.dataset.mode === "ref")));
+
+// ---------- reference images ----------
+function renderRefs() {
+  const refs = set.refs || [];
+  $("batchRefs").innerHTML = refs.length
+    ? refs.map((f, i) => `<div><img src="${imgSrc(f)}" alt="" data-file="${escapeHtml(f)}" title="${escapeHtml(f)}"><button type="button" data-i="${i}" title="Remove">×</button></div>`).join("")
+    : '<p class="desc">No reference images yet. Add your starred picks, upload a photo, or use “Use as batch reference” in Rate or Compare.</p>';
+  $("refNote").textContent = refs.length ? `${refs.length} reference image(s), sent with every image in the batch.` : "";
+}
+
+function addRefs(files) {
+  set.refs ??= [];
+  const before = set.refs.length;
+  for (const f of files) if (!set.refs.includes(f)) set.refs.push(f);
+  saveSet();
+  renderRefs();
+  renderWarnings();
+  return set.refs.length - before;
+}
+
+$("batchRefs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-i]");
+  if (btn) {
+    set.refs.splice(Number(btn.dataset.i), 1);
+    saveSet();
+    renderRefs();
+    renderWarnings();
+  } else if (e.target.dataset.file) openLightbox(e.target.dataset.file, "Batch reference");
+});
+$("refAddStarred").onclick = () => {
+  const starred = Object.keys(state.stars).filter((f) => state.library.some((r) => r.file === f));
+  if (!starred.length) return toast("No starred images yet: star key picks in Rate or Compare (c).", true);
+  const added = addRefs(starred);
+  toast(added ? `Added ${added} starred image(s).` : "All starred images are already references.");
+};
+$("refClear").onclick = () => {
+  set.refs = [];
+  saveSet();
+  renderRefs();
+  renderWarnings();
+};
+$("refUpload").onchange = async (e) => {
+  for (const file of e.target.files) {
+    try {
+      const data_url = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
+      addRefs([(await api("/api/uploads", { method: "POST", body: { data_url } })).file]);
+    } catch (err) {
+      toast(`Could not upload ${file.name}: ${err.message}`, true);
+    }
+  }
+  e.target.value = "";
+};
+
+// "Use as batch reference" from Rate or Compare: add to the active group and switch to reference mode.
+on("add-batch-ref", (file) => {
+  const added = addRefs([file]);
+  if (!set.refMode) setRefMode(true);
+  toast(added ? `Added to the batch references of “${set.name}” (reference mode is on).` : "Already a batch reference.");
 });
 $("rePreview").onclick = () => renderTemplateInfo();
 
 function renderTemplateInfo() {
-  const slots = findSlots(set.template);
-  const { prompt, missing } = buildPrompt(set.template, set.pools, set.locks);
-  const unused = Object.keys(set.pools).filter((s) => !slots.includes(s));
+  const slots = findSlots(tpl());
+  const { prompt, missing } = buildPrompt(tpl(), set.pools, set.locks);
+  const inUse = slotsInUse();
+  const unused = Object.keys(set.pools).filter((s) => !inUse.has(s));
   const notes = [];
   if (missing.length) notes.push(`<span class="warn">No options for: ${missing.map((s) => `{${escapeHtml(s)}}`).join(", ")}</span>`);
   if (unused.length) notes.push(`Pools not used by the template: ${unused.map(escapeHtml).join(", ")}`);
@@ -95,8 +192,10 @@ function renderTemplateInfo() {
 
 // ---------- slot pools ----------
 function renderPools() {
-  const slots = findSlots(set.template);
-  const all = [...slots, ...Object.keys(set.pools).filter((s) => !slots.includes(s))];
+  // This template's slots, then pools no template uses (the other template's pools stay hidden).
+  const slots = findSlots(tpl());
+  const inUse = slotsInUse();
+  const all = [...slots, ...Object.keys(set.pools).filter((s) => !inUse.has(s))];
   for (const s of slots) set.pools[s] ??= [];
   $("pools").innerHTML = all.map((slot) => {
     // Keep blank rows (a just-added option) in the editor; normalizeOptions drops them for picking.
@@ -189,11 +288,11 @@ on("lock-picks", (picks) => {
 function addSlot() {
   const name = $("newSlotName").value.trim().replace(/^\{|\}$/g, "");
   if (!/^[A-Za-z_][\w-]*$/.test(name)) return toast("Slot names use letters, digits, _ and -, starting with a letter.", true);
-  if (findSlots(set.template).includes(name)) return toast(`{${name}} is already in the template.`, true);
+  if (findSlots(tpl()).includes(name)) return toast(`{${name}} is already in the template.`, true);
   const t = $("template");
   const at = t.selectionStart ?? t.value.length;
   t.value = `${t.value.slice(0, at)}{${name}}${t.value.slice(at)}`;
-  set.template = t.value;
+  setTpl(t.value);
   if (!set.pools[name]?.length) set.pools[name] = [{ value: "", weight: 1 }];
   saveSet();
   renderPools();
@@ -227,11 +326,11 @@ $("poolLoad").onclick = async () => {
   try {
     const s = await api(`/api/pool-sets/${encodeURIComponent(name)}`);
     Object.assign(set, { template: s.template, pools: s.pools, locks: s.locks || {} });
+    if (s.refTemplate != null) set.refTemplate = s.refTemplate;
+    if (set.refMode) ensureRefTemplate();
     saveSet();
-    $("template").value = set.template;
     $("poolSetName").value = name;
-    renderPools();
-    renderTemplateInfo();
+    showMode();
     toast(`Loaded “${name}”.`);
   } catch (e) {
     toast(e.message, true);
@@ -264,12 +363,18 @@ $("poolDelete").onclick = async () => {
   refreshPoolSetList("");
 };
 $("poolReset").onclick = () => {
-  Object.assign(set, defaultPoolSet());
+  if (set.refMode) {
+    // Reference mode: restore the reference template and its slots' starter options only.
+    set.refTemplate = DEFAULT_REF_TEMPLATE;
+    for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) set.pools[slot] = structuredClone(opts);
+    for (const slot of Object.keys(DEFAULT_REF_POOLS)) delete set.locks[slot];
+  } else {
+    Object.assign(set, defaultPoolSet());
+    if (set.refTemplate != null) ensureRefTemplate(); // keep the reference template's pools
+  }
   saveSet();
-  $("template").value = set.template;
-  renderPools();
-  renderTemplateInfo();
-  toast("Restored the default template and pools (saved sets are unchanged).");
+  showMode();
+  toast(`Restored the default ${set.refMode ? "reference-image template" : "template and pools"} (saved sets are unchanged).`);
 };
 
 // ---------- models & run settings ----------
@@ -313,8 +418,22 @@ async function refreshSelection() {
   renderWarnings();
 }
 
+// Reference mode: selected models that can't take this many reference images.
+const refsTooMany = () =>
+  set?.refMode ? cfg.models.filter((_, i) => (selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0) < (set.refs?.length ?? 0)) : [];
+
 function renderWarnings() {
   const warn = [];
+  if (set?.refMode) {
+    const n = set.refs?.length ?? 0;
+    if (!n) warn.push("⚠ Reference mode: add at least one reference image.");
+    const lacking = refsTooMany();
+    if (lacking.length)
+      warn.push(`⚠ Can't take ${n} reference image(s), so the batch won't run: ${lacking.map((id) => {
+        const i = cfg.models.indexOf(id);
+        return `${escapeHtml(modelName(id))} (max ${selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0})`;
+      }).join(", ")}`);
+  }
   const noSeed = cfg.models.filter((_, i) => !selectedCaps[i]?.supported_parameters?.seed);
   if (noSeed.length) warn.push(`⚠ No seed support (results can't be reproduced exactly): ${noSeed.map(modelName).map(escapeHtml).join(", ")}`);
   for (const key of ["resolution", "aspect_ratio"]) {
@@ -326,10 +445,14 @@ function renderWarnings() {
 
   let est = 0;
   let unknown = 0;
+  const refCount = set?.refMode ? set.refs?.length ?? 0 : 0;
   cfg.models.forEach((_, i) => {
     const c = estimateImageCost(selectedCaps[i]?.pricing, cfg.resolution);
     if (c == null) unknown++;
     else est += c * cfg.perModel;
+    // Reference images are billed as input images where the provider lists a price for them.
+    const input = (selectedCaps[i]?.pricing || []).find((p) => p.billable === "input_image" && p.unit === "image");
+    if (input && refCount) est += input.cost_usd * refCount * cfg.perModel;
   });
   const total = cfg.models.length * cfg.perModel;
   $("estimate").textContent = total
@@ -362,12 +485,16 @@ function buildJobs(batchId, batchName) {
   cfg.models.forEach((model, mi) => {
     const sp = selectedCaps[mi]?.supported_parameters || {};
     for (let i = 0; i < cfg.perModel; i++) {
-      const { prompt, picks } = buildPrompt(set.template, set.pools, set.locks);
+      const { prompt, picks } = buildPrompt(tpl(), set.pools, set.locks);
       const payload = {
         model,
         prompt,
-        app: { kind: "batch", template: set.template, picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id },
+        app: { kind: "batch", template: tpl(), picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id },
       };
+      if (set.refMode) {
+        payload.ref_files = [...set.refs]; // the server sends these as input_references and records them
+        payload.app.mode = "reference";
+      }
       if (sp.resolution && cfg.resolution) payload.resolution = cfg.resolution;
       if (sp.aspect_ratio && cfg.aspect_ratio) payload.aspect_ratio = cfg.aspect_ratio;
       if (sp.seed) payload.seed = cfg.seedMode === "fixed" ? fixed : randomSeed();
@@ -392,9 +519,11 @@ export async function postImage(payload) {
 
 async function runBatch() {
   const problems = [];
-  const { missing } = buildPrompt(set.template, set.pools, set.locks);
+  const { missing } = buildPrompt(tpl(), set.pools, set.locks);
   if (missing.length) problems.push(`No options for ${missing.map((s) => `{${s}}`).join(", ")}.`);
   if (!cfg.models.length) problems.push("Select at least one model.");
+  if (set.refMode && !set.refs?.length) problems.push("Reference mode needs at least one reference image.");
+  if (refsTooMany().length) problems.push(`These models can't take ${set.refs.length} reference image(s): ${refsTooMany().map(modelName).join(", ")}. Remove references or untick them.`);
   if (cfg.seedMode === "fixed") {
     const s = Number(cfg.seed);
     if (!Number.isInteger(s) || s < 0 || s > MAX_SEED) problems.push(`Seed must be an integer 0–${MAX_SEED}.`);
