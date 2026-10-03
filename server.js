@@ -154,6 +154,7 @@ function toRecord(file, meta, mtime) {
     picks: meta.app?.picks ?? null,
     kind: meta.app?.kind ?? null,
     batch_id: meta.app?.batch_id ?? null,
+    batch_name: meta.app?.batch_name ?? null,
     parent: meta.app?.parent ?? null,
     references: meta.app?.ref_files ?? null,
     rating: meta.rating ?? null,

@@ -241,8 +241,13 @@
     <section class="panel">
       <div class="row between" style="margin-bottom:8px">
         <h2 style="margin:0">Slot pools</h2>
-        <span class="row"><span class="desc">Weight 0 disables an option. 🔒 locks a slot to one value.</span><button type="button" id="unlockAll">Unlock all</button></span>
+        <span class="row">
+          <input type="text" id="newSlotName" placeholder="new slot, e.g. face" style="width:170px">
+          <button type="button" id="addSlot" title="Insert {slot} at the cursor in the template and create its pool">Add slot</button>
+          <button type="button" id="unlockAll">Unlock all</button>
+        </span>
       </div>
+      <p class="desc" style="margin:-2px 0 10px">Each <code>{slot}</code> in the template gets a pool below. Add one with the box above, or by typing <code>{face}</code> in the template. To drop a slot, delete it from the template, then click <b>Remove</b> on its greyed-out card. Weight 0 disables an option, and 🔒 locks a slot to one value.</p>
       <div id="pools" class="pools"></div>
     </section>
   </div>
@@ -271,6 +276,7 @@
       </div>
       <p class="desc" id="batchSeedNote" style="margin-top:5px"></p>
     </div>
+    <label class="field">Batch name (optional)<input type="text" id="batchName" maxlength="80" placeholder="e.g. face-shape test"></label>
     <p class="desc" id="estimate"></p>
     <div class="row">
       <button class="primary" id="runBatch" style="flex:1">Run batch</button>
@@ -321,7 +327,7 @@
 <section id="tab-analysis" class="tab hidden">
   <div class="panel toolbar">
     <select id="aModel"></select>
-    <label class="check"><input type="checkbox" id="aBatchOnly"> Batch images only</label>
+    <select id="aBatch" title="Which images the stats and exports cover"></select>
     <label class="row desc">Flag below <input type="number" id="aMin" min="1" step="1" style="width:70px"> rated samples</label>
     <span class="row" style="margin-left:auto">
       <span class="desc">Export:</span>

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, csvCell, toJSONL } from "../public/lib/analysis.js";
+import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, csvCell, toJSONL, listBatches } from "../public/lib/analysis.js";
 
 const rec = (model, value, picks, tags = []) => ({ file: `${model}-${value}.png`, model, picks, rating: value == null ? undefined : { value, tags } });
 
@@ -75,4 +75,22 @@ test("slotStatsCSV and JSONL export", () => {
   assert.equal(jsonl.trim().split("\n").length, records.length);
   assert.deepEqual(JSON.parse(jsonl.split("\n")[0]), records[0]);
   assert.equal(toJSONL([]), "");
+});
+
+test("listBatches groups by batch id, newest first, with names and counts", () => {
+  const recs = [
+    { file: "a", model: "m1", batch_id: "2026-10-01T10-00-00-000Z", rating: { value: 3 } },
+    { file: "b", model: "m2", batch_id: "2026-10-01T10-00-00-000Z" },
+    { file: "c", model: "m1", batch_id: "2026-10-03T09-00-00-000Z", batch_name: "face test", rating: { value: 5 } },
+    { file: "d", model: "m1", batch_id: null }, // not from a batch
+  ];
+  assert.deepEqual(listBatches(recs), [
+    { id: "2026-10-03T09-00-00-000Z", name: "face test", count: 1, rated: 1, models: ["m1"] },
+    { id: "2026-10-01T10-00-00-000Z", name: null, count: 2, rated: 1, models: ["m1", "m2"] },
+  ]);
+});
+
+test("imagesCSV only has slot columns used by the exported rows", () => {
+  const header = imagesCSV([{ file: "x", picks: { face: "oval" } }]).split("\r\n")[0];
+  assert.ok(header.endsWith("batch_id,batch_name,parent,template,prompt,slot_face"));
 });

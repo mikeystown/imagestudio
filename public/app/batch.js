@@ -145,6 +145,26 @@ on("lock-picks", (picks) => {
   renderTemplateInfo();
   toast(`Locked ${Object.keys(picks).length} slot(s). Unlock any you want to keep varying.`);
 });
+// Insert {name} at the template cursor (or the end) and start its pool with one empty option.
+function addSlot() {
+  const name = $("newSlotName").value.trim().replace(/^\{|\}$/g, "");
+  if (!/^[A-Za-z_][\w-]*$/.test(name)) return toast("Slot names use letters, digits, _ and -, starting with a letter.", true);
+  if (findSlots(set.template).includes(name)) return toast(`{${name}} is already in the template.`, true);
+  const t = $("template");
+  const at = t.selectionStart ?? t.value.length;
+  t.value = `${t.value.slice(0, at)}{${name}}${t.value.slice(at)}`;
+  set.template = t.value;
+  if (!set.pools[name]?.length) set.pools[name] = [{ value: "", weight: 1 }];
+  saveSet();
+  renderPools();
+  renderTemplateInfo();
+  $("newSlotName").value = "";
+  document.querySelector(`.slot[data-slot="${CSS.escape(name)}"] [data-opt]`)?.focus();
+  toast(`Added {${name}}. Check where it landed in the template and adjust the wording around it.`);
+}
+$("addSlot").onclick = addSlot;
+$("newSlotName").addEventListener("keydown", (e) => { if (e.key === "Enter") addSlot(); });
+
 $("unlockAll").onclick = () => {
   set.locks = {};
   saveSet();
@@ -296,7 +316,7 @@ function setSeedMode(mode) {
 document.querySelectorAll("#batchSeedBox .seg button").forEach((b) => (b.onclick = () => setSeedMode(b.dataset.mode)));
 
 // ---------- run ----------
-function buildJobs(batchId) {
+function buildJobs(batchId, batchName) {
   const fixed = Number(cfg.seed);
   const jobs = [];
   cfg.models.forEach((model, mi) => {
@@ -306,7 +326,7 @@ function buildJobs(batchId) {
       const payload = {
         model,
         prompt,
-        app: { kind: "batch", template: set.template, picks, batch_id: batchId },
+        app: { kind: "batch", template: set.template, picks, batch_id: batchId, batch_name: batchName || undefined },
       };
       if (sp.resolution && cfg.resolution) payload.resolution = cfg.resolution;
       if (sp.aspect_ratio && cfg.aspect_ratio) payload.aspect_ratio = cfg.aspect_ratio;
@@ -344,7 +364,8 @@ async function runBatch() {
   $("batchError").textContent = "";
 
   const batchId = new Date().toISOString().replace(/[:.]/g, "-");
-  const queue = buildJobs(batchId);
+  const queue = buildJobs(batchId, $("batchName").value.trim());
+  emit("batch-started", batchId); // Analysis switches to this batch
   run = { stopped: false, total: queue.length, done: 0, failed: 0, cost: 0, started: Date.now() };
   $("runBatch").disabled = true;
   $("stopBatch").disabled = false;

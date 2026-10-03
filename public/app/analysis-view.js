@@ -2,25 +2,45 @@
 
 import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
-import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
+import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
-let opts = { model: "", batchOnly: false, minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
+// batch: "" = all images, "*" = every batch image, otherwise one batch id.
+let opts = { model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
+if (opts.batchOnly) opts.batch = "*"; // setting from before the batch picker existed
+delete opts.batchOnly;
 const isActive = () => !$("tab-analysis").classList.contains("hidden");
 
 export function initAnalysis() {
   $("aMin").value = opts.minSamples;
-  $("aBatchOnly").checked = opts.batchOnly;
   render();
 }
 
-const records = () =>
-  state.library.filter((r) => (!opts.model || r.model === opts.model) && (!opts.batchOnly || r.kind === "batch"));
+const inBatch = (r) => !opts.batch || (opts.batch === "*" ? r.kind === "batch" : r.batch_id === opts.batch);
+const records = () => state.library.filter((r) => (!opts.model || r.model === opts.model) && inBatch(r));
+
+// Batch ids are ISO timestamps with ":" and "." replaced by "-".
+const batchDate = (id) => new Date(id.replace(/T(\d\d)-(\d\d)-(\d\d)-(\d+)Z$/, "T$1:$2:$3.$4Z"));
+function batchLabel(b) {
+  const when = batchDate(b.id).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const models = b.models.length > 1 ? `${b.models.length} models` : modelName(b.models[0]);
+  return `${b.name ? `${b.name} · ` : ""}${when} · ${b.count} images, ${b.rated} rated · ${models}`;
+}
+
+function renderBatchOptions() {
+  const batches = listBatches(state.library);
+  const entries = batches.map((b) => [b.id, batchLabel(b)]);
+  // A batch that was just started has no images yet; keep it selectable.
+  if (opts.batch && opts.batch !== "*" && !batches.some((b) => b.id === opts.batch)) entries.unshift([opts.batch, "Selected batch (no images yet)"]);
+  $("aBatch").innerHTML = [["", "All images"], ["*", "All batches"], ...entries]
+    .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.batch ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+}
 
 const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 const avg = (x) => (x == null ? "—" : x.toFixed(2));
 const ratingName = (x) => (x == null ? "" : RATINGS[Math.round(x)]);
 
 export function render() {
+  renderBatchOptions();
   const models = [...new Set(state.library.map((r) => r.model))].sort();
   $("aModel").innerHTML = `<option value="">All models</option>` +
     models.map((m) => `<option value="${escapeHtml(m)}" ${m === opts.model ? "selected" : ""}>${escapeHtml(modelName(m))}</option>`).join("");
@@ -70,7 +90,8 @@ export function render() {
 }
 
 $("aModel").onchange = () => { opts.model = $("aModel").value; store.set("analysis:opts", opts); render(); };
-$("aBatchOnly").onchange = () => { opts.batchOnly = $("aBatchOnly").checked; store.set("analysis:opts", opts); render(); };
+$("aBatch").onchange = () => { opts.batch = $("aBatch").value; store.set("analysis:opts", opts); render(); };
+on("batch-started", (id) => { opts.batch = id; opts.model = ""; store.set("analysis:opts", opts); });
 $("aMin").oninput = () => { opts.minSamples = Math.max(1, Number($("aMin").value) || 1); store.set("analysis:opts", opts); render(); };
 
 // Clicking an option row opens Rate filtered to that slot value.
@@ -80,7 +101,15 @@ $("aSlots").addEventListener("click", (e) => {
 });
 
 // ---------- export ----------
-const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+// File name suffix: the selected batch's name or id, else the current time.
+function stamp() {
+  if (opts.batch && opts.batch !== "*") {
+    const b = listBatches(state.library).find((x) => x.id === opts.batch);
+    const name = b?.name?.replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "");
+    return `batch-${name || opts.batch.slice(0, 19)}`;
+  }
+  return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+}
 $("exImagesCsv").onclick = () => download(`images-${stamp()}.csv`, imagesCSV(records()), "text/csv");
 $("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records()), "application/x-ndjson");
 $("exSlotsCsv").onclick = () => download(`slot-stats-${stamp()}.csv`, slotStatsCSV(slotStats(records(), { minSamples: opts.minSamples })), "text/csv");

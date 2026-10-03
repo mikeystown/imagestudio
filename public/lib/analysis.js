@@ -57,6 +57,21 @@ export function modelStats(records, { topTags = 5 } = {}) {
     .sort(byMeanDesc);
 }
 
+// One entry per batch run, newest first: id, optional name, image/rated counts and models used.
+export function listBatches(records) {
+  const groups = {};
+  for (const r of records) if (r.batch_id) (groups[r.batch_id] ??= []).push(r);
+  return Object.entries(groups)
+    .map(([id, recs]) => ({
+      id,
+      name: recs.find((r) => r.batch_name)?.batch_name || null,
+      count: recs.length,
+      rated: recs.filter(isRated).length,
+      models: [...new Set(recs.map((r) => r.model))].sort(),
+    }))
+    .sort((a, b) => b.id.localeCompare(a.id)); // ids are ISO timestamps
+}
+
 // ---------- export ----------
 
 export function csvCell(v) {
@@ -74,13 +89,13 @@ export function imagesCSV(records) {
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
-    "rating", "rating_label", "tags", "notes", "kind", "batch_id", "parent", "template", "prompt",
+    "rating", "rating_label", "tags", "notes", "kind", "batch_id", "batch_name", "parent", "template", "prompt",
     ...slots.map((s) => `slot_${s}`),
   ];
   const rows = records.map((r) => [
     r.file, r.created_at, r.model, r.seed, r.resolution, r.aspect_ratio, r.cost,
     isRated(r) ? r.rating.value : "", isRated(r) ? RATINGS[r.rating.value] : "",
-    (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.batch_id, r.parent, r.template, r.prompt,
+    (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
     ...slots.map((s) => r.picks?.[s]),
   ]);
   return toCSV(header, rows);
