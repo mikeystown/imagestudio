@@ -81,6 +81,26 @@ export function fitBradleyTerry(files, comps, { iterations = 500, tolerance = 1e
     : { score: null, se: null, n: 0 }]));
 }
 
+// Groups of images linked by chains of comparisons. Bradley-Terry scores are only comparable within one group.
+export function components(files, comps) {
+  const parent = new Map(files.map((f) => [f, f]));
+  const find = (f) => {
+    while (parent.get(f) !== f) {
+      parent.set(f, parent.get(parent.get(f)));
+      f = parent.get(f);
+    }
+    return f;
+  };
+  for (const c of comps) if (parent.has(c.image_a) && parent.has(c.image_b)) parent.set(find(c.image_a), find(c.image_b));
+  const groups = new Map();
+  for (const f of files) {
+    const root = find(f);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(f);
+  }
+  return [...groups.values()].sort((a, b) => b.length - a.length);
+}
+
 // Winner of a comparison as a file name, or "tie".
 const winnerOf = (c) => (c.result === "tie" ? "tie" : c.result === "a" ? c.image_a : c.image_b);
 
@@ -111,6 +131,8 @@ function weighted(items, weights, rng) {
 const pickRandom = (items, rng) => items[Math.floor(rng() * items.length) % items.length];
 
 // Next pair to show: { a, b, is_repeat, phase } or null if fewer than two images.
+// Phase 0 links separate clusters (e.g. groups never compared with each other), phase 1 spreads matchups,
+// phase 2 pairs close scores.
 // comps must already be limited to the image set (see withinSet). scores: Map file -> { score }.
 export function choosePair(files, comps, { scores = new Map(), rng = Math.random, lastKey = null, repeatRate = REPEAT_RATE } = {}) {
   if (files.length < 2) return null;
@@ -121,6 +143,24 @@ export function choosePair(files, comps, { scores = new Map(), rng = Math.random
     met.get(c.image_a)?.add(c.image_b);
     met.get(c.image_b)?.add(c.image_a);
     if (!c.is_repeat) judged.push(c);
+  }
+  const clusters = components(files, comps);
+  if (clusters.length > 1) {
+    // Link the smallest cluster to another one, using the least-compared images on both sides.
+    // Never re-offer the pair just shown (it may have been skipped).
+    const smallest = clusters.reduce((x, y) => (y.length < x.length ? y : x));
+    const inSmallest = new Set(smallest);
+    const others = files.filter((f) => !inSmallest.has(f));
+    const fewest = (list) => {
+      const min = Math.min(...list.map((f) => counts.get(f)));
+      return pickRandom(list.filter((f) => counts.get(f) === min), rng);
+    };
+    const byCount = (list) => [...list].sort((x, y) => counts.get(x) - counts.get(y));
+    for (const a of [fewest(smallest), ...byCount(smallest)]) {
+      const options = others.filter((o) => pairKey(a, o) !== lastKey);
+      if (options.length) return { a, b: fewest(options), is_repeat: false, phase: 0 };
+    }
+    return { a: smallest[0], b: others[0], is_repeat: false, phase: 0 }; // only the skipped pair can link
   }
   const phase = Math.min(...counts.values()) < PHASE1_TARGET ? 1 : 2;
 

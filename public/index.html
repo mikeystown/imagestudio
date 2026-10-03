@@ -350,6 +350,7 @@
     <select id="cGroup" title="Group"></select>
     <select id="cBatch" title="Run within the group"></select>
     <label class="row desc">Rated at least <select id="cMin" style="width:auto"></select></label>
+    <label class="row desc" title="Keep only the best N of each group: by comparison score where the group has been compared, else by rating">Top per group <input type="number" id="cPerGroup" min="0" max="500" step="1" placeholder="all" style="width:64px"></label>
     <label class="row desc">Target per image <input type="number" id="cTarget" min="1" max="200" step="1" style="width:70px"></label>
     <span class="desc" id="cSetInfo"></span>
     <span class="row" style="margin-left:auto">

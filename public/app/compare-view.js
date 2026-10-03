@@ -3,14 +3,15 @@
 import { $, store, state, api, escapeHtml, imgSrc, on, toast, typingInField } from "./util.js";
 import { RATINGS, isRated, scoreOf } from "../lib/ratings.js";
 import { listBatches } from "../lib/analysis.js";
-import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate } from "../lib/compare.js";
+import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components } from "../lib/compare.js";
 import { groupList, groupName, isKnownGroup } from "./groups.js";
 import { openLightbox, lightboxOpen } from "./lightbox.js";
 
 // minScore 0 = any image, including unrated.
 // mix: blend in a fixed random sample of 7s from elsewhere. from: "" off, "*" other groups, or a group id.
 // files / mainFiles hold the drawn samples so the set stays the same across reloads until Resample.
-let opts = { group: "", batch: "", minScore: 6, target: 10, view: "compare", ...store.get("compare:opts", {}) };
+// perGroup: keep only the best N images of each group (0 = all).
+let opts = { group: "", batch: "", minScore: 6, perGroup: 0, target: 10, view: "compare", ...store.get("compare:opts", {}) };
 opts.mix = { from: "", count: 12, same: false, files: [], mainFiles: [], ...opts.mix };
 const saveOpts = () => store.set("compare:opts", opts);
 const sessionId = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`; // one per app load
@@ -29,6 +30,7 @@ const isActive = () => !$("tab-compare").classList.contains("hidden");
 
 export function initCompare() {
   $("cTarget").value = opts.target;
+  $("cPerGroup").value = opts.perGroup || "";
   $("cMin").innerHTML = `<option value="0" ${opts.minScore === 0 ? "selected" : ""}>Any (incl. unrated)</option>` +
     RATINGS.map((r, i) => `<option value="${i + 1}" ${opts.minScore === i + 1 ? "selected" : ""}>${i + 1} · ${escapeHtml(r)}</option>`).join("");
   $("cMixCount").value = opts.mix.count;
@@ -57,11 +59,41 @@ function renderMixOptions() {
 }
 
 // Files matching the group / run / rating filters, before any sampling.
-const selectionFiles = () =>
-  state.library
+function selectionFiles() {
+  const recs = state.library
     .filter((r) => (!opts.group || r.group_id === opts.group) && (!opts.batch || r.batch_id === opts.batch))
-    .filter((r) => opts.minScore === 0 || (isRated(r) && scoreOf(r) >= opts.minScore))
-    .map((r) => r.file);
+    .filter((r) => opts.minScore === 0 || (isRated(r) && scoreOf(r) >= opts.minScore));
+  return opts.perGroup > 0 ? topPerGroup(recs, opts.perGroup) : recs.map((r) => r.file);
+}
+
+// Stable pseudo-random order for ties, so the chosen set doesn't change between reloads.
+const stableHash = (s) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+};
+
+// Best `k` of each group: by Bradley-Terry score from comparisons within the group, then (for images not yet
+// compared) by rating.
+function topPerGroup(recs, k) {
+  const byGroup = new Map();
+  for (const r of recs) {
+    if (!byGroup.has(r.group_id)) byGroup.set(r.group_id, []);
+    byGroup.get(r.group_id).push(r);
+  }
+  const out = [];
+  for (const list of byGroup.values()) {
+    const files = list.map((r) => r.file);
+    const bt = fitBradleyTerry(files, withinSet(state.comparisons, files));
+    const key = (r) => [bt.get(r.file).score ?? -Infinity, isRated(r) ? scoreOf(r) : 0, stableHash(r.file)];
+    list.sort((x, y) => {
+      const [a, b] = [key(x), key(y)];
+      return b[0] - a[0] || b[1] - a[1] || a[2] - b[2];
+    });
+    out.push(...list.slice(0, k).map((r) => r.file));
+  }
+  return out;
+}
 
 // Draw new samples: `count` 7s from the chosen source (never from the selection itself), and with
 // "same number" the same count from the selection.
@@ -101,7 +133,7 @@ function rebuild() {
   renderFilters();
   renderMixOptions();
   computeSet();
-  $("cSetInfo").textContent = `${files.length} image(s) in set`;
+  $("cSetInfo").textContent = `${files.length} image(s) in set${opts.perGroup > 0 ? ` (top ${opts.perGroup} per group)` : ""}`;
   $("cMixInfo").textContent = !opts.mix.from ? ""
     : anchorSet.size ? `${mainSet.size} from this selection + ${anchorSet.size} mixed-in 7s, shown blind`
     : "No 7s found outside this selection: pick a group, or another source.";
@@ -135,6 +167,14 @@ $("cMixFrom").onchange = mixChanged;
 $("cMixCount").onchange = mixChanged;
 $("cMixSame").onchange = mixChanged;
 $("cResample").onclick = mixChanged;
+$("cPerGroup").onchange = () => {
+  opts.perGroup = Math.max(0, Math.min(500, Number($("cPerGroup").value) || 0));
+  $("cPerGroup").value = opts.perGroup || "";
+  saveOpts();
+  if (opts.mix.from) resample();
+  pair = null;
+  rebuild();
+};
 $("cTarget").oninput = () => {
   opts.target = Math.max(1, Math.min(200, Number($("cTarget").value) || 1));
   saveOpts();
@@ -256,7 +296,10 @@ function renderProgress() {
   const p = progress(files, comps, opts.target);
   const agree = selfAgreement(comps);
   const counts = [...countComparisons(files, comps).values()];
-  const phase = counts.length < 2 ? "" : Math.min(...counts) < PHASE1_TARGET ? "phase 1: spreading matchups" : "phase 2: close scores";
+  const clusters = components(files, comps).length;
+  const phase = counts.length < 2 ? ""
+    : clusters > 1 ? `linking: ${clusters - 1} more pick${clusters > 2 ? "s" : ""} until every image is connected`
+    : Math.min(...counts) < PHASE1_TARGET ? "phase 1: spreading matchups" : "phase 2: close scores";
   $("cBar").style.width = `${(p.fraction * 100).toFixed(1)}%`;
   $("cProgress").textContent = [
     `${p.reached}/${p.images} images at ${opts.target} comparisons`,
@@ -289,17 +332,32 @@ function mixSummary(rows) {
 }
 
 function renderRanking() {
+  // Scores are only comparable within a cluster of images linked by comparisons; rank each cluster separately.
+  const clusters = components(files, comps).filter((c) => c.length > 1);
+  const clusterOf = new Map(clusters.flatMap((c, i) => c.map((f) => [f, i + 1])));
+  const split = clusters.length > 1;
   const rows = files
-    .map((f) => ({ f, rec: state.library.find((r) => r.file === f), ...scores.get(f) }))
-    .sort((x, y) => (y.score ?? -Infinity) - (x.score ?? -Infinity) || y.n - x.n);
+    .map((f) => ({ f, rec: state.library.find((r) => r.file === f), cluster: clusterOf.get(f) ?? Infinity, ...scores.get(f) }))
+    .sort((x, y) => (split ? x.cluster - y.cluster : 0) || (y.score ?? -Infinity) - (x.score ?? -Infinity) || y.n - x.n);
+  rows.forEach((r, i) => (r.rank = i > 0 && rows[i - 1].cluster === r.cluster ? rows[i - 1].rank + 1 : 1));
   const mixing = anchorSet.size > 0;
+  const groupsIn = (c) => [...new Set(c.map((f) => groupName(state.library.find((r) => r.file === f)?.group_id)))].join(", ");
+  const warning = split ? `
+    <div class="panel" style="border-color:var(--warn);margin-bottom:10px">
+      <b class="warn">⚠ Not one ranking yet: these images form ${clusters.length} separate clusters</b>
+      <p class="desc" style="margin:4px 0 0">No comparisons link them, so a score in one cluster says nothing about a score in another.
+        Each cluster is ranked on its own below (${clusters.map((c, i) => `C${i + 1}: ${c.length} images, ${escapeHtml(groupsIn(c))}`).join(" · ")}).
+        Keep comparing: the picker links clusters first.</p>
+    </div>` : "";
   $("cRanking").innerHTML = rows.length ? `
+    ${warning}
     ${mixSummary(rows)}
     <table class="stats rank">
-      <thead><tr><th class="num">#</th><th></th><th class="num">Score</th><th class="num">± SE</th><th class="num">Comparisons</th><th class="num">Rating</th>${mixing ? "<th>Source</th>" : ""}<th>Group</th></tr></thead>
-      <tbody>${rows.map((r, i) => `
+      <thead><tr><th class="num">#</th>${split ? "<th>Cluster</th>" : ""}<th></th><th class="num">Score</th><th class="num">± SE</th><th class="num">Comparisons</th><th class="num">Rating</th>${mixing ? "<th>Source</th>" : ""}<th>Group</th></tr></thead>
+      <tbody>${rows.map((r) => `
         <tr>
-          <td class="num">${r.score == null ? "–" : i + 1}</td>
+          <td class="num">${r.score == null ? "–" : r.rank}</td>
+          ${split ? `<td class="desc">${r.cluster === Infinity ? "" : `C${r.cluster}`}</td>` : ""}
           <td class="thumb"><img loading="lazy" src="${imgSrc(r.f)}" data-file="${escapeHtml(r.f)}" alt=""></td>
           <td class="num">${r.score == null ? '<span class="desc">not compared</span>' : r.score.toFixed(2)}</td>
           <td class="num ci">${r.se == null ? "" : `± ${r.se.toFixed(2)}`}</td>

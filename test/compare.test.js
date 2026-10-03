@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate } from "../public/lib/compare.js";
+import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate, components } from "../public/lib/compare.js";
 import { imagesCSV } from "../public/lib/analysis.js";
 
 let nextId = 0;
@@ -52,14 +52,14 @@ test("BT leaves uncompared images unscored and ignores comparisons outside the s
 });
 
 // ---------- pairing ----------
-test("phase 1 spreads matchups evenly without repeating pairs", () => {
+test("a new set spreads matchups evenly (linking, then phase 1) without repeating pairs", () => {
   const files = times(10, (_, i) => `f${i}`);
   const rng = seeded(7);
   const comps = [];
   let picks = 0;
   while (Math.min(...countComparisons(files, comps).values()) < PHASE1_TARGET) {
     const p = choosePair(files, comps, { rng, repeatRate: 0 });
-    assert.equal(p.phase, 1);
+    assert.ok(p.phase <= 1);
     assert.equal(p.is_repeat, false);
     assert.notEqual(p.a, p.b);
     comps.push(cmp(p.a, p.b, "a"));
@@ -92,14 +92,16 @@ test("phase 2 pairs an image with one of its three closest-scored unmet opponent
 
 test("about 5% of picks re-show an already judged pair", () => {
   const files = times(30, (_, i) => `f${i}`);
-  const comps = [cmp("f0", "f1", "a"), cmp("f2", "f3", "b")];
+  // A connected chain, so no linking phase.
+  const comps = times(29, (_, i) => cmp(files[i], files[i + 1], "a"));
+  const judged = new Set(comps.map((c) => pairKey(c.image_a, c.image_b)));
   const rng = seeded(11);
   let repeats = 0;
   for (let t = 0; t < 4000; t++) {
     const p = choosePair(files, comps, { rng });
     if (p.is_repeat) {
       repeats++;
-      assert.ok(["f0|f1", "f2|f3"].includes(pairKey(p.a, p.b)));
+      assert.ok(judged.has(pairKey(p.a, p.b)));
     }
   }
   assert.ok(repeats > 140 && repeats < 270, `${repeats} repeats in 4000`);
@@ -169,4 +171,30 @@ test("crossWinRate counts only A-vs-B matchups, either way round, ties half", ()
   ];
   assert.deepEqual(crossWinRate(comps, A, B), { n: 4, winsA: 2.5, rate: 2.5 / 4 });
   assert.deepEqual(crossWinRate([], A, B), { n: 0, winsA: 0, rate: null });
+});
+
+test("components finds clusters linked by comparisons", () => {
+  const cs = components(["a", "b", "c", "d", "e"], [cmp("a", "b", "a"), cmp("b", "c", "tie"), cmp("d", "x", "a")]);
+  assert.deepEqual(cs.map((c) => c.sort()), [["a", "b", "c"], ["d"], ["e"]]);
+});
+
+test("separate clusters (e.g. groups never compared) are linked before anything else", () => {
+  // Two groups compared only internally, plus two never-compared images.
+  const g3 = ["g3a", "g3b", "g3c"];
+  const g4 = ["g4a", "g4b", "g4c"];
+  const comps = [cmp("g3a", "g3b", "a"), cmp("g3b", "g3c", "a"), cmp("g4a", "g4b", "a"), cmp("g4b", "g4c", "b")];
+  const files = [...g3, ...g4, "g1a", "g2a"];
+  const rng = seeded(4);
+  let picks = 0;
+  while (components(files, comps).length > 1) {
+    const p = choosePair(files, comps, { rng, repeatRate: 1 }); // repeats must not interrupt linking
+    assert.equal(p.phase, 0);
+    assert.equal(p.is_repeat, false);
+    const before = components(files, comps).length;
+    comps.push(cmp(p.a, p.b, "a"));
+    assert.equal(components(files, comps).length, before - 1, "each linking pick joins two clusters");
+    picks++;
+  }
+  assert.equal(picks, 3); // 4 clusters -> 3 links
+  assert.notEqual(choosePair(files, comps, { rng, repeatRate: 0 }).phase, 0);
 });
