@@ -216,7 +216,7 @@ function renderPair() {
     $("cLeft").removeAttribute("src");
     $("cRight").removeAttribute("src");
     arena.insertAdjacentHTML("beforeend", `<div class="empty">${files.length < 2
-      ? "Fewer than two images match. Lower “Rated at least” or pick another group or run."
+      ? `Fewer than two images match. Lower “Rated at least”, ${opts.perGroup > 0 ? "raise or clear “Finalists: top”, " : ""}or pick another group or run.`
       : "No pair available."}</div>`);
     return;
   }

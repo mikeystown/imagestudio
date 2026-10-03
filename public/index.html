@@ -138,7 +138,8 @@
   .bar { height: 8px; border-radius: 99px; background: var(--accent); }
 
   /* compare */
-  .arena { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; height: calc(100vh - 215px); min-height: 320px; }
+  /* position: relative keeps the "no pair" message inside the arena instead of covering the whole page */
+  .arena { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; height: calc(100vh - 215px); min-height: 320px; }
   .arena figure { margin: 0; position: relative; background: var(--panel); border: 2px solid var(--border); border-radius: 12px; overflow: hidden; cursor: pointer; transition: border-color .12s; }
   .arena figure:hover { border-color: var(--accent); }
   .arena figure.win { border-color: var(--accent); background: var(--soft); }
