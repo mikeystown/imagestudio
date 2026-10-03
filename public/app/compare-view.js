@@ -1,11 +1,11 @@
 // Compare tab: blind pairwise comparisons with Bradley-Terry scores, alongside (not replacing) 1-7 ratings.
 
-import { $, store, state, api, escapeHtml, imgSrc, on, toast, typingInField } from "./util.js";
+import { $, store, state, api, escapeHtml, imgSrc, on, emit, toast, typingInField, modelName } from "./util.js";
 import { RATINGS, isRated, scoreOf } from "../lib/ratings.js";
 import { listBatches } from "../lib/analysis.js";
-import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters } from "../lib/compare.js";
+import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters, recordOf } from "../lib/compare.js";
 import { groupList, groupName, isKnownGroup, groupPicker } from "./groups.js";
-import { openLightbox, lightboxOpen } from "./lightbox.js";
+import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
 
 // minScore 0 = any image, including unrated.
 // mix: blend in a fixed random sample of 7s from elsewhere. from: "" off, "*" other groups, or a group id.
@@ -314,6 +314,19 @@ $("cArena").addEventListener("click", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (!isActive() || opts.view !== "ranking" || typingInField(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (k === "ArrowDown" || k === "ArrowRight" || k === "j") stepRank(1);
+  else if (k === "ArrowUp" || k === "ArrowLeft" || k === "k") stepRank(-1);
+  else if (k === "f" || k === " ") {
+    const r = rankRow(rankSel);
+    if (lightboxOpen()) closeLightbox();
+    else if (r) openLightbox(r.f, rankCaption(r));
+  } else return;
+  e.preventDefault();
+});
+
+document.addEventListener("keydown", (e) => {
   if (!isActive() || opts.view !== "compare" || typingInField(e) || lightboxOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = e.key;
   if (k === "ArrowLeft") pick("left");
@@ -373,6 +386,8 @@ function renderRanking() {
   const rows = files
     .map((f) => ({ f, rec: state.library.find((r) => r.file === f), cluster: ranks.get(f)?.cluster ?? Infinity, rank: ranks.get(f)?.rank, ...scores.get(f) }))
     .sort((x, y) => x.cluster - y.cluster || (x.rank ?? Infinity) - (y.rank ?? Infinity) || y.n - x.n);
+  rankRows = rows;
+  if (!rows.some((r) => r.f === rankSel)) rankSel = rows[0]?.f ?? null;
   const mixing = anchorSet.size > 0;
   const groupsIn = (c) => [...new Set(c.map((f) => groupName(state.library.find((r) => r.file === f)?.group_id)))].join(", ");
   const warning = split ? `
@@ -382,16 +397,16 @@ function renderRanking() {
         Each cluster is ranked on its own below (${clusters.map((c, i) => `C${i + 1}: ${c.length} images, ${escapeHtml(groupsIn(c))}`).join(" · ")}).
         Keep comparing: the picker links clusters first.</p>
     </div>` : "";
-  $("cRanking").innerHTML = rows.length ? `
+  $("cRankList").innerHTML = rows.length ? `
     ${warning}
     ${mixSummary(rows)}
     <table class="stats rank">
       <thead><tr><th class="num">#</th>${split ? "<th>Cluster</th>" : ""}<th></th><th class="num">Score</th><th class="num">± SE</th><th class="num">Comparisons</th><th class="num">Rating</th>${mixing ? "<th>Source</th>" : ""}<th>Group</th></tr></thead>
       <tbody>${rows.map((r) => `
-        <tr>
+        <tr data-file="${escapeHtml(r.f)}" class="${r.f === rankSel ? "sel" : ""}">
           <td class="num">${r.score == null ? "–" : r.rank}</td>
           ${split ? `<td class="desc">${r.cluster === Infinity ? "" : `C${r.cluster}`}</td>` : ""}
-          <td class="thumb"><img loading="lazy" src="${imgSrc(r.f)}" data-file="${escapeHtml(r.f)}" alt=""></td>
+          <td class="thumb"><img loading="lazy" src="${imgSrc(r.f)}" alt=""></td>
           <td class="num">${r.score == null ? '<span class="desc">not compared</span>' : r.score.toFixed(2)}</td>
           <td class="num ci">${r.se == null ? "" : `± ${r.se.toFixed(2)}`}</td>
           <td class="num">${r.n}</td>
@@ -402,10 +417,93 @@ function renderRanking() {
     </table>
     <p class="desc" style="margin-top:8px">Score is a Bradley–Terry log-strength (0 = average of this set): a 1-point lead means winning about 73% of head-to-heads. ± SE shrinks as an image gets more comparisons.</p>`
     : '<p class="desc">No images in this set.</p>';
+  renderRankDetail();
 }
-$("cRanking").addEventListener("click", (e) => {
-  const img = e.target.closest("img[data-file]");
-  if (img) openLightbox(img.dataset.file, `${scores.get(img.dataset.file)?.score?.toFixed(2) ?? "–"} ± ${scores.get(img.dataset.file)?.se?.toFixed(2) ?? "–"}`);
+
+// ---------- ranking detail: the selected image's characteristics ----------
+let rankRows = []; // rows in ranking order, for cycling
+let rankSel = null; // selected file
+
+const rankRow = (file) => rankRows.find((r) => r.f === file);
+// "#3", "#3 in C2" when the set is split into clusters, or "not compared".
+function rankPlace(r) {
+  if (r.score == null) return "not compared";
+  const split = rankRows.some((x) => x.cluster === 2);
+  return `#${r.rank}${split ? ` in C${r.cluster}` : ""}`;
+}
+function rankCaption(r) {
+  const score = r.score == null ? "" : ` · ${r.score.toFixed(2)} ± ${r.se.toFixed(2)}`;
+  return `${rankPlace(r)}${score} · ${groupName(r.rec?.group_id)}${r.rec && isRated(r.rec) ? ` · rated ${scoreOf(r.rec)}` : ""}`;
+}
+
+function selectRank(file, { scroll = true } = {}) {
+  if (!file) return;
+  rankSel = file;
+  $("cRankList").querySelectorAll("tr[data-file]").forEach((tr) => tr.classList.toggle("sel", tr.dataset.file === file));
+  if (scroll) $("cRankList").querySelector(`tr[data-file="${CSS.escape(file)}"]`)?.scrollIntoView({ block: "nearest" });
+  renderRankDetail();
+}
+
+function stepRank(delta) {
+  if (!rankRows.length) return;
+  const i = rankRows.findIndex((r) => r.f === rankSel);
+  selectRank(rankRows[Math.max(0, Math.min(rankRows.length - 1, (i < 0 ? 0 : i) + delta))].f);
+}
+
+function renderRankDetail() {
+  const r = rankRow(rankSel);
+  if (!r) return ($("cRankDetail").innerHTML = '<p class="desc">Select an image in the list.</p>');
+  updateLightbox(r.f, rankCaption(r));
+  const rec = r.rec || {};
+  const w = recordOf(r.f, comps);
+  const picks = Object.entries(rec.picks || {});
+  const i = rankRows.indexOf(r);
+  $("cRankDetail").innerHTML = `
+    <img class="big zoomable" src="${imgSrc(r.f)}" alt="" title="Full size (f)">
+    <div class="row between">
+      <b>${escapeHtml(rankPlace(r))}${r.score == null ? "" : ` of ${rankRows.filter((x) => x.cluster === r.cluster).length}`}</b>
+      <span class="row">
+        <button type="button" data-step="-1" ${i <= 0 ? "disabled" : ""} title="Previous (↑)">‹</button>
+        <span class="desc">${i + 1} / ${rankRows.length}</span>
+        <button type="button" data-step="1" ${i >= rankRows.length - 1 ? "disabled" : ""} title="Next (↓)">›</button>
+      </span>
+    </div>
+    <div class="meta" style="margin-top:0">
+      <span>score: <b>${r.score == null ? "–" : `${r.score.toFixed(2)} ± ${r.se.toFixed(2)}`}</b></span>
+      <span>record in this set: <b>${w.wins}–${w.losses}–${w.ties}</b> <span class="desc">(W–L–T)</span></span>
+      <span>rating: <b>${isRated(rec) ? `${scoreOf(rec)} · ${escapeHtml(RATINGS[rec.rating.value])}` : "unrated"}</b></span>
+      <span>group: <b>${escapeHtml(groupName(rec.group_id))}</b></span>
+      ${anchorSet.size ? `<span>source: <b>${anchorSet.has(r.f) ? "mixed-in 7" : "selection"}</b></span>` : ""}
+      <span>run: <b>${escapeHtml(rec.batch_name || rec.batch_id || "—")}</b></span>
+      <span>model: <b>${escapeHtml(modelName(rec.model))}</b></span>
+      <span>seed: <b>${rec.seed ?? "—"}</b></span>
+      ${rec.rating?.tags?.length ? `<span style="flex-basis:100%">tags: <b>${escapeHtml(rec.rating.tags.join(", "))}</b></span>` : ""}
+      ${rec.rating?.notes ? `<span style="flex-basis:100%">notes: <b>${escapeHtml(rec.rating.notes)}</b></span>` : ""}
+    </div>
+    ${picks.length ? `<table class="picks">${picks.map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join("")}</table>` : '<p class="desc">No slot values (not made from a template).</p>'}
+    <p class="prompt">${escapeHtml(rec.prompt || "")}</p>
+    <div class="row wrap">
+      <button type="button" data-act="full">Full size <kbd>f</kbd></button>
+      <button type="button" data-act="rate" title="Open this image in the Rate tab">Show in Rate</button>
+      <button type="button" data-act="lock" ${picks.length ? "" : "disabled"} title="Lock these slot values in the Batch template">Use these slot values in Batch</button>
+    </div>
+    <p class="desc">↑/↓ (or ←/→, j/k) move through the ranking · f or Space for full size.</p>`;
+}
+
+$("cRankList").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-file]");
+  if (tr) selectRank(tr.dataset.file, { scroll: false });
+});
+$("cRankDetail").addEventListener("click", (e) => {
+  const r = rankRow(rankSel);
+  if (!r) return;
+  if (e.target.matches("img.big")) return openLightbox(r.f, rankCaption(r));
+  const el = e.target.closest("button");
+  if (!el) return;
+  if (el.dataset.step) stepRank(Number(el.dataset.step));
+  else if (el.dataset.act === "full") openLightbox(r.f, rankCaption(r));
+  else if (el.dataset.act === "rate") emit("show-image", r.f);
+  else if (el.dataset.act === "lock") { emit("lock-picks", r.rec.picks); emit("tab", "batch"); }
 });
 
 function setView(view) {

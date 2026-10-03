@@ -257,3 +257,16 @@ export function rankWithinClusters(files, comps, scores) {
   });
   return out;
 }
+
+// Head-to-head record of one image: wins, losses and ties across the given comparisons.
+export function recordOf(file, comps) {
+  const out = { wins: 0, losses: 0, ties: 0 };
+  for (const c of comps) {
+    const side = c.image_a === file ? "a" : c.image_b === file ? "b" : null;
+    if (!side) continue;
+    if (c.result === "tie") out.ties++;
+    else if (c.result === side) out.wins++;
+    else out.losses++;
+  }
+  return out;
+}

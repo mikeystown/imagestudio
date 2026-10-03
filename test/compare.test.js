@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters } from "../public/lib/compare.js";
+import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters, recordOf } from "../public/lib/compare.js";
 import { imagesCSV, comparisonsCSV } from "../public/lib/analysis.js";
 
 let nextId = 0;
@@ -258,4 +258,10 @@ test("comparisonsCSV writes one row per pick with both images side by side", () 
   assert.equal(cross.a_slot_eyes, "green");
   assert.equal(cross.b_slot_eyes, "blue");
   assert.equal(cross.b_slot_hair, "");
+});
+
+test("recordOf counts an image's wins, losses and ties from either side", () => {
+  const comps = [cmp("A", "B", "a"), cmp("C", "A", "a"), cmp("A", "D", "tie"), cmp("B", "A", "a"), cmp("B", "C", "a")];
+  assert.deepEqual(recordOf("A", comps), { wins: 1, losses: 2, ties: 1 });
+  assert.deepEqual(recordOf("Z", comps), { wins: 0, losses: 0, ties: 0 });
 });
