@@ -3,6 +3,7 @@
 import { $, store, state, api, getCaps, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, typingInField, randomSeed, loadLibrary, MAX_SEED } from "./util.js";
 import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
 import { postImage } from "./batch.js";
+import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
 
 const KINDS = ["batch", "single", "reproduce", "reference", "blend"];
 let filters = { rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", ...store.get("rate:filters", {}) };
@@ -18,7 +19,7 @@ export function initRate() {
   $("rateKeys").innerHTML =
     `<b>←/→</b> or <b>h/l</b> move · <b>↑/↓</b> or <b>k/j</b> row · <b>1–7</b> rate · <b>0</b> clear · ` +
     TAGS.map((t, i) => `<b>${TAG_KEYS[i]}</b> ${escapeHtml(t)}`).join(" · ") +
-    ` · <b>n</b> notes · <b>x</b> select for blend · <b>Esc</b> leave notes`;
+    ` · <b>n</b> notes · <b>x</b> select for blend · <b>f</b>/<b>Space</b> full size (click to zoom to 100%) · <b>Esc</b> close / leave notes`;
   $("autoAdvance").checked = autoAdvance;
   renderFilterOptions();
   refilter();
@@ -147,6 +148,22 @@ $("rateGrid").addEventListener("click", (e) => {
   if (e.ctrlKey || e.metaKey || e.shiftKey) toggleBlend(fig.dataset.file);
   else select(fig.dataset.file);
 });
+$("rateGrid").addEventListener("dblclick", (e) => {
+  const fig = e.target.closest("figure");
+  if (fig && !(e.ctrlKey || e.metaKey || e.shiftKey)) openFull();
+});
+
+// Caption for the full-size viewer: who made it, and how it's rated so far.
+function fullCaption(r) {
+  const rating = isRated(r) ? `${r.rating.value + 1} · ${RATINGS[r.rating.value]}` : "unrated";
+  const tags = r.rating?.tags?.length ? ` · ${r.rating.tags.join(", ")}` : "";
+  const pos = list.findIndex((x) => x.file === r.file) + 1;
+  return `${pos}/${list.length} · ${modelName(r.model)} · seed ${r.seed ?? "—"} · ${rating}${tags}`;
+}
+function openFull() {
+  const r = byFile(current);
+  if (r) openLightbox(r.file, fullCaption(r));
+}
 
 function select(file) {
   const prev = current;
@@ -190,12 +207,16 @@ $("blendGo").onclick = () => openAction("blend", [...blendSel].map(byFile).filte
 // ---------- detail & rating ----------
 function renderDetail() {
   const r = byFile(current);
-  if (!r) return ($("rateDetail").innerHTML = '<p class="desc">Select an image.</p>');
+  if (!r) {
+    closeLightbox();
+    return ($("rateDetail").innerHTML = '<p class="desc">Select an image.</p>');
+  }
+  updateLightbox(r.file, fullCaption(r));
   const v = r.rating?.value;
   const tags = r.rating?.tags || [];
   const picks = Object.entries(r.picks || {});
   $("rateDetail").innerHTML = `
-    <a href="${imgSrc(r.file)}" target="_blank"><img class="big" src="${imgSrc(r.file)}" alt=""></a>
+    <img class="big zoomable" src="${imgSrc(r.file)}" alt="" title="View full size (f)">
     <div class="ratings">
       ${RATINGS.map((label, i) => `<button type="button" data-rate="${i}" class="${v === i ? "on" : ""}"><kbd>${i + 1}</kbd> ${escapeHtml(label)}</button>`).join("")}
     </div>
@@ -228,6 +249,7 @@ function renderDetail() {
 
 $("rateDetail").addEventListener("click", (e) => {
   const r = byFile(current);
+  if (r && e.target.matches("img.big")) return openFull();
   const el = e.target.closest("button, a[data-goto]");
   if (!r || !el) return;
   if (el.dataset.rate) return setRating(r, Number(el.dataset.rate));
@@ -284,7 +306,8 @@ document.addEventListener("keydown", (e) => {
   else if (/^[1-7]$/.test(k)) setRating(r, Number(k) - 1);
   else if (k === "0") { saveRating(r, { value: null }); renderDetail(); }
   else if (TAG_KEYS.includes(k)) toggleTag(r, TAGS[TAG_KEYS.indexOf(k)]);
-  else if (k === "n") $("rateNotes")?.focus();
+  else if (k === "f" || k === " ") lightboxOpen() ? closeLightbox() : openFull();
+  else if (k === "n") { closeLightbox(); $("rateNotes")?.focus(); }
   else if (k === "x") { toggleBlend(r.file); renderDetail(); }
   else return;
   e.preventDefault();

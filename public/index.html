@@ -140,7 +140,15 @@
   dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); width: min(640px, 92vw); padding: 0; }
   dialog::backdrop { background: #0006; }
   .dlg { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
-  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; transition: transform .2s; z-index: 10; max-width: 90vw; }
+  img.zoomable { cursor: zoom-in; }
+  .lightbox { position: fixed; inset: 0; z-index: 20; background: #000e; display: grid; place-items: center; overflow: auto; }
+  .lightbox img { max-width: none; cursor: zoom-in; }
+  .lightbox.zoomed { display: block; }
+  .lightbox.zoomed img { display: block; margin: auto; cursor: zoom-out; }
+  #lbCaption { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); color: #fff; background: #0009; padding: 4px 12px; border-radius: 99px; font-size: 13px; pointer-events: none; white-space: nowrap; }
+  #lbCaption:empty { display: none; }
+  #lbClose { position: fixed; top: 12px; right: 14px; background: #0009; color: #fff; border: 1px solid #fff4; border-radius: 99px; font-size: 18px; line-height: 1; padding: 6px 12px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 10px; transition: transform .2s; z-index: 30; max-width: 90vw; }
   #toast.show { transform: translateX(-50%); }
   #toast.err { background: var(--danger); color: #fff; }
 </style>
@@ -348,6 +356,11 @@
     </div>
   </form>
 </dialog>
+<div id="lightbox" class="lightbox hidden">
+  <img id="lbImg" alt="">
+  <div id="lbCaption"></div>
+  <button type="button" id="lbClose" title="Close (Esc)">×</button>
+</div>
 <div id="toast"></div>
 
 <script type="module" src="/app/main.js"></script>

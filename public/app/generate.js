@@ -1,6 +1,7 @@
 // Generate tab: single prompt, single run (the original Image Studio screen).
 
 import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, addRecords, MAX_SEED, DEFAULT_MODEL } from "./util.js";
+import { openLightbox } from "./lightbox.js";
 
 let seedMode = "random";
 let refs = []; // data URLs
@@ -162,7 +163,9 @@ $("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctr
 function show(entry) {
   selected = entry;
   const src = imgSrc(entry.file);
-  $("viewer").innerHTML = `<a href="${src}" target="_blank"><img src="${src}" alt=""></a>`;
+  $("viewer").innerHTML = `<img class="zoomable" src="${src}" alt="" title="View full size">`;
+  $("viewer").querySelector("img").onclick = () =>
+    openLightbox(entry.file, `${entry.modelName || entry.model} · seed ${entry.seed ?? "—"}`);
   const p = Object.entries(entry.params || {}).map(([k, v]) => `<span>${k}: <b>${escapeHtml(String(v))}</b></span>`).join("");
   $("meta").innerHTML = `
     <span>model: <b>${escapeHtml(entry.modelName || entry.model)}</b></span>
