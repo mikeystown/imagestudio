@@ -3,8 +3,8 @@
 import { $, store, state, api, escapeHtml, imgSrc, on, toast, typingInField } from "./util.js";
 import { RATINGS, isRated, scoreOf } from "../lib/ratings.js";
 import { listBatches } from "../lib/analysis.js";
-import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components } from "../lib/compare.js";
-import { groupList, groupName, isKnownGroup } from "./groups.js";
+import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters } from "../lib/compare.js";
+import { groupList, groupName, isKnownGroup, groupPicker } from "./groups.js";
 import { openLightbox, lightboxOpen } from "./lightbox.js";
 
 // minScore 0 = any image, including unrated.
@@ -50,11 +50,7 @@ export function initCompare() {
 
 // ---------- the image set ----------
 function renderFilters() {
-  opts.groups = opts.groups.filter((id) => isKnownGroup(id));
-  $("cGroupsMenu").innerHTML =
-    `<label class="check"><input type="checkbox" data-all ${opts.groups.length ? "" : "checked"}> All groups</label>` +
-    groupList().map((g) => `<label class="check"><input type="checkbox" value="${escapeHtml(g.id)}" ${opts.groups.includes(g.id) ? "checked" : ""}> ${escapeHtml(g.name)}</label>`).join("");
-  $("cGroupsLabel").textContent = opts.groups.length ? opts.groups.map(groupName).join(" + ") : "All groups";
+  opts.groups = picker.render();
   const runs = listBatches(state.library.filter(inGroups));
   if (opts.batch && !runs.some((b) => b.id === opts.batch)) opts.batch = "";
   $("cBatch").innerHTML = [["", "All runs"], ...runs.map((b) => [b.id, `${b.name ? b.name + " · " : ""}${b.id.slice(0, 16).replace("T", " ")} · ${b.count} images`])]
@@ -163,23 +159,16 @@ function rebuild() {
 }
 
 // Groups dropdown: tick any number of groups; "All groups" clears the selection.
-$("cGroupsMenu").addEventListener("change", (e) => {
-  const box = e.target;
-  if (box.dataset.all !== undefined) opts.groups = [];
-  else {
-    const chosen = new Set(opts.groups);
-    if (box.checked) chosen.add(box.value);
-    else chosen.delete(box.value);
-    opts.groups = groupList().map((g) => g.id).filter((id) => chosen.has(id)); // keep group order
-  }
-  opts.batch = "";
-  saveOpts();
-  if (opts.mix.from) resample();
-  pair = null;
-  rebuild();
-});
-document.addEventListener("click", (e) => {
-  if ($("cGroups").open && !$("cGroups").contains(e.target)) $("cGroups").open = false;
+const picker = groupPicker("cGroups", {
+  get: () => opts.groups,
+  set: (ids) => {
+    opts.groups = ids;
+    opts.batch = "";
+    saveOpts();
+    if (opts.mix.from) resample();
+    pair = null;
+    rebuild();
+  },
 });
 
 for (const [id, key] of [["cBatch", "batch"], ["cMin", "minScore"]]) {
@@ -379,12 +368,11 @@ function mixSummary(rows) {
 function renderRanking() {
   // Scores are only comparable within a cluster of images linked by comparisons; rank each cluster separately.
   const clusters = components(files, comps).filter((c) => c.length > 1);
-  const clusterOf = new Map(clusters.flatMap((c, i) => c.map((f) => [f, i + 1])));
+  const ranks = rankWithinClusters(files, comps, scores);
   const split = clusters.length > 1;
   const rows = files
-    .map((f) => ({ f, rec: state.library.find((r) => r.file === f), cluster: clusterOf.get(f) ?? Infinity, ...scores.get(f) }))
-    .sort((x, y) => (split ? x.cluster - y.cluster : 0) || (y.score ?? -Infinity) - (x.score ?? -Infinity) || y.n - x.n);
-  rows.forEach((r, i) => (r.rank = i > 0 && rows[i - 1].cluster === r.cluster ? rows[i - 1].rank + 1 : 1));
+    .map((f) => ({ f, rec: state.library.find((r) => r.file === f), cluster: ranks.get(f)?.cluster ?? Infinity, rank: ranks.get(f)?.rank, ...scores.get(f) }))
+    .sort((x, y) => x.cluster - y.cluster || (x.rank ?? Infinity) - (y.rank ?? Infinity) || y.n - x.n);
   const mixing = anchorSet.size > 0;
   const groupsIn = (c) => [...new Set(c.map((f) => groupName(state.library.find((r) => r.file === f)?.group_id)))].join(", ");
   const warning = split ? `
@@ -435,3 +423,15 @@ on("ratings", () => isActive() && !busy && rebuild());
 on("library", () => isActive() && !busy && rebuild());
 on("groups", () => isActive() && renderFilters());
 on("tab-shown", (name) => ready && name === "compare" && rebuild());
+
+// The Compare set as the Ranking view shows it, for exports: Map file -> { rank, cluster, score, se, n }.
+export function compareSnapshot() {
+  computeSet();
+  const ranks = rankWithinClusters(files, comps, scores);
+  const out = new Map();
+  for (const f of files) {
+    const s = scores.get(f);
+    out.set(f, { ...ranks.get(f), score: s?.score, se: s?.se, n: s?.n ?? 0 });
+  }
+  return out;
+}

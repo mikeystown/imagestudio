@@ -244,3 +244,16 @@ export function crossWinRate(comps, setA, setB) {
   }
   return { n, winsA, rate: n ? winsA / n : null };
 }
+
+// Rank images within each cluster of linked images (scores from different clusters are not comparable).
+// Returns Map file -> { rank, cluster, clusters }; images never compared within the set are absent.
+export function rankWithinClusters(files, comps, scores) {
+  const clusters = components(files, comps).filter((c) => c.length > 1);
+  const out = new Map();
+  clusters.forEach((c, i) => {
+    [...c]
+      .sort((x, y) => (scores.get(y)?.score ?? -Infinity) - (scores.get(x)?.score ?? -Infinity))
+      .forEach((f, j) => out.set(f, { rank: j + 1, cluster: i + 1, clusters: clusters.length }));
+  });
+  return out;
+}

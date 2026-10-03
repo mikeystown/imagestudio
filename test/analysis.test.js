@@ -83,7 +83,7 @@ test("listBatches groups by batch id, newest first, with names and counts", () =
 
 test("imagesCSV only has slot columns used by the exported rows", () => {
   const header = imagesCSV([{ file: "x", picks: { face: "oval" } }]).split("\r\n")[0];
-  assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,bt_score,bt_se,n_comparisons,slot_face"));
+  assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,bt_score,bt_se,n_comparisons,compare_rank,compare_cluster,compare_score,compare_se,compare_n,slot_face"));
 });
 
 test("imagesCSV writes the group name via the supplied lookup", () => {

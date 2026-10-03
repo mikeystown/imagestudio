@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate, components } from "../public/lib/compare.js";
-import { imagesCSV } from "../public/lib/analysis.js";
+import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters } from "../public/lib/compare.js";
+import { imagesCSV, comparisonsCSV } from "../public/lib/analysis.js";
 
 let nextId = 0;
 const cmp = (a, b, result, extra = {}) => ({ id: String(nextId++), image_a: a, image_b: b, result, shown_left: "a", session_id: "s", created_at: new Date(1e12 + nextId * 1000).toISOString(), is_repeat: false, ...extra });
@@ -143,7 +143,7 @@ test("imagesCSV carries bt_score, bt_se and n_comparisons next to the slot colum
   const csv = imagesCSV([{ file: "x.jpg", picks: { eyes: "blue" } }, { file: "y.jpg", picks: { eyes: "green" } }], { bt });
   const [header, x, y] = csv.trim().split("\r\n").map((l) => l.split(","));
   const col = (row, name) => row[header.indexOf(name)];
-  assert.ok(header.join().endsWith("bt_score,bt_se,n_comparisons,slot_eyes"));
+  assert.ok(header.join().endsWith("bt_score,bt_se,n_comparisons,compare_rank,compare_cluster,compare_score,compare_se,compare_n,slot_eyes"));
   assert.deepEqual([col(x, "bt_score"), col(x, "bt_se"), col(x, "n_comparisons")], ["0.5000", "0.2500", "7"]);
   assert.deepEqual([col(y, "bt_score"), col(y, "n_comparisons")], ["", "0"]);
 });
@@ -197,4 +197,65 @@ test("separate clusters (e.g. groups never compared) are linked before anything 
   }
   assert.equal(picks, 3); // 4 clusters -> 3 links
   assert.notEqual(choosePair(files, comps, { rng, repeatRate: 0 }).phase, 0);
+});
+
+test("rankWithinClusters ranks each linked cluster separately and skips uncompared images", () => {
+  const files = ["a", "b", "c", "x", "y", "lonely"];
+  const comps = [cmp("a", "b", "a"), cmp("b", "c", "a"), cmp("x", "y", "b")];
+  const ranks = rankWithinClusters(files, comps, fitBradleyTerry(files, comps));
+  assert.deepEqual(ranks.get("a"), { rank: 1, cluster: 1, clusters: 2 });
+  assert.deepEqual(ranks.get("c"), { rank: 3, cluster: 1, clusters: 2 });
+  assert.deepEqual(ranks.get("y"), { rank: 1, cluster: 2, clusters: 2 });
+  assert.equal(ranks.has("lonely"), false);
+});
+
+test("imagesCSV carries the Compare-set rank next to the global scores", () => {
+  const compare = new Map([["x.jpg", { rank: 2, cluster: 1, score: 0.3, se: 0.4, n: 5 }]]);
+  const [header, x, y] = imagesCSV([{ file: "x.jpg" }, { file: "y.jpg" }], { compare }).trim().split("\r\n").map((l) => l.split(","));
+  const col = (row, name) => row[header.indexOf(name)];
+  assert.deepEqual(["compare_rank", "compare_cluster", "compare_score", "compare_se", "compare_n"].map((h) => col(x, h)), ["2", "1", "0.3000", "0.4000", "5"]);
+  assert.equal(col(y, "compare_rank"), "");
+});
+
+test("comparisonsCSV writes one row per pick with both images side by side", () => {
+  const byFile = new Map([
+    ["g3.jpg", { file: "g3.jpg", group_id: "g3", batch_name: "run A", model: "m", seed: 1, prompt: "p, one", rating: { value: 6, tags: ["Eyes"] }, picks: { eyes: "blue" } }],
+    ["g4.jpg", { file: "g4.jpg", group_id: "g4", batch_id: "b2", model: "m", seed: 2, prompt: "p2", rating: { value: 5, tags: [] }, picks: { eyes: "green", hair: "dark" } }],
+    ["g4b.jpg", { file: "g4b.jpg", group_id: "g4", model: "m", picks: {} }],
+  ]);
+  const comps = [
+    cmp("g4.jpg", "g3.jpg", "b", { shown_left: "b", created_at: "2026-10-04T10:00:00Z", id: "c1" }), // g3 (right side b... shown left) wins
+    cmp("g4.jpg", "g4b.jpg", "tie", { created_at: "2026-10-04T09:00:00Z", id: "c0" }),
+    cmp("g3.jpg", "gone.jpg", "a", { id: "c2" }), // unknown image: skipped
+  ];
+  const names = { g3: "Group 3", g4: "Group 4" };
+  const csv = comparisonsCSV(comps, { byFile, groupName: (id) => names[id], compare: new Map([["g3.jpg", { rank: 1, cluster: 1, score: 0.5 }]]) });
+  const lines = csv.trim().split("\r\n");
+  assert.equal(lines.length, 3, "header + 2 picks, oldest first");
+  const parse = (l) => { const out = []; let cur = "", q = false; for (let i = 0; i < l.length; i++) { const ch = l[i]; if (q) { if (ch === '"' && l[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; } else if (ch === '"') q = true; else if (ch === ",") { out.push(cur); cur = ""; } else cur += ch; } out.push(cur); return out; };
+  const header = parse(lines[0]);
+  const row = (i) => Object.fromEntries(parse(lines[i]).map((v, j) => [header[j], v]));
+  const tie = row(1), cross = row(2);
+  assert.equal(tie.id, "c0");
+  assert.equal(tie.matchup, "Group 4 vs Group 4");
+  assert.equal(tie.cross_group, "false");
+  assert.equal(tie.a_won, "0.5");
+  assert.equal(tie.winner_group, "tie");
+  assert.equal(cross.matchup, "Group 3 vs Group 4");
+  assert.equal(cross.cross_group, "true");
+  assert.equal(cross.result, "b");
+  assert.equal(cross.a_won, "0");
+  assert.equal(cross.winner_file, "g3.jpg");
+  assert.equal(cross.winner_group, "Group 3");
+  assert.equal(cross.a_position, "right");
+  assert.equal(cross.b_position, "left");
+  assert.equal(cross.b_rating_1_7, "7");
+  assert.equal(cross.b_rating_label, "Stunning");
+  assert.equal(cross.b_run, "run A");
+  assert.equal(cross.a_run, "b2");
+  assert.equal(cross.b_compare_rank, "1");
+  assert.equal(cross.b_prompt, "p, one");
+  assert.equal(cross.a_slot_eyes, "green");
+  assert.equal(cross.b_slot_eyes, "blue");
+  assert.equal(cross.b_slot_hair, "");
 });

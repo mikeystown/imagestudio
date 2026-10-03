@@ -2,12 +2,16 @@
 
 import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
-import { groupList, groupName, isKnownGroup } from "./groups.js";
+import { groupName, groupPicker } from "./groups.js";
+import { compareSnapshot } from "./compare-view.js";
 import { fitBradleyTerry } from "../lib/compare.js";
-import { slotStats, modelStats, overallStats, imagesCSV, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
+import { slotStats, modelStats, overallStats, imagesCSV, comparisonsCSV, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
-// group: "" = all groups, else a group id. batch: "" = all runs (in the group), else one run's batch id.
-let opts = { group: "", model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
+// groups: group ids (empty = all). batch: "" = all runs (in those groups), else one run's batch id.
+// exportKind: "images" (one row per image) or "comparisons" (one row per pairwise pick).
+let opts = { groups: [], model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, exportKind: "images", ...store.get("analysis:opts", {}) };
+if (typeof opts.group === "string") opts.groups = opts.group ? [opts.group] : opts.groups; // single-group setting from before
+delete opts.group;
 if (opts.batch === "*") opts.batch = ""; // "All batches" option from before groups existed
 delete opts.batchOnly;
 const saveOpts = () => store.set("analysis:opts", opts);
@@ -15,10 +19,11 @@ const isActive = () => !$("tab-analysis").classList.contains("hidden");
 
 export function initAnalysis() {
   $("aMin").value = opts.minSamples;
+  $("exportKind").value = opts.exportKind;
   render();
 }
 
-const inGroup = (r) => !opts.group || r.group_id === opts.group;
+const inGroup = (r) => !opts.groups.length || opts.groups.includes(r.group_id);
 const records = () =>
   state.library.filter((r) => inGroup(r) && (!opts.batch || r.batch_id === opts.batch) && (!opts.model || r.model === opts.model));
 
@@ -30,10 +35,17 @@ function batchLabel(b) {
   return `${b.name ? `${b.name} · ` : ""}${when} · ${b.count} images, ${b.rated} rated · ${models}`;
 }
 
+const picker = groupPicker("aGroups", {
+  get: () => opts.groups,
+  set: (ids) => {
+    opts.groups = ids;
+    opts.batch = "";
+    saveOpts();
+    render();
+  },
+});
 function renderGroupOptions() {
-  if (opts.group && !isKnownGroup(opts.group)) opts.group = "";
-  $("aGroup").innerHTML = [["", "All groups"], ...groupList().map((g) => [g.id, g.name])]
-    .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.group ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+  opts.groups = picker.render();
 }
 
 // Runs within the selected group.
@@ -42,7 +54,7 @@ function renderBatchOptions() {
   const entries = batches.map((b) => [b.id, batchLabel(b)]);
   // A run that was just started has no images yet; keep it selectable.
   if (opts.batch && !batches.some((b) => b.id === opts.batch)) entries.unshift([opts.batch, "Selected run (no images yet)"]);
-  $("aBatch").innerHTML = [["", opts.group ? "All runs in this group" : "All runs"], ...entries]
+  $("aBatch").innerHTML = [["", opts.groups.length ? "All runs in these groups" : "All runs"], ...entries]
     .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.batch ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
 }
 
@@ -102,18 +114,17 @@ export function render() {
     : '<p class="desc">No rated images yet.</p>';
 }
 
-$("aGroup").onchange = () => { opts.group = $("aGroup").value; opts.batch = ""; saveOpts(); render(); };
 $("aModel").onchange = () => { opts.model = $("aModel").value; saveOpts(); render(); };
 $("aBatch").onchange = () => { opts.batch = $("aBatch").value; saveOpts(); render(); };
 // A new run selects its group and itself.
-on("batch-started", ({ id, group }) => { Object.assign(opts, { group, batch: id, model: "" }); saveOpts(); });
+on("batch-started", ({ id, group }) => { Object.assign(opts, { groups: [group], batch: id, model: "" }); saveOpts(); });
 on("groups", () => isActive() && render());
 $("aMin").oninput = () => { opts.minSamples = Math.max(1, Number($("aMin").value) || 1); saveOpts(); render(); };
 
 // Clicking an option row opens Rate filtered to that slot value.
 $("aSlots").addEventListener("click", (e) => {
   const tr = e.target.closest("tr[data-slot]");
-  if (tr) emit("rate-filter", { group: opts.group, slot: tr.dataset.slot, slotValue: tr.dataset.value, model: opts.model });
+  if (tr) emit("rate-filter", { group: opts.groups.length === 1 ? opts.groups[0] : "", slot: tr.dataset.slot, slotValue: tr.dataset.value, model: opts.model });
 });
 
 // ---------- export ----------
@@ -124,12 +135,26 @@ function stamp() {
     const b = listBatches(state.library).find((x) => x.id === opts.batch);
     return `run-${slug(b?.name) || opts.batch.slice(0, 19)}`;
   }
-  if (opts.group) return `group-${slug(groupName(opts.group)) || opts.group}`;
+  if (opts.groups.length) return opts.groups.map((g) => slug(groupName(g)) || g).join("+");
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 }
-// The single export: one row per image in the current selection.
-$("exportCsv").onclick = () =>
-  download(`images-${stamp()}.csv`, imagesCSV(records(), { groupName, bt: fitBradleyTerry(state.library.map((r) => r.file), state.comparisons) }), "text/csv");
+// One export button; the CSV is either one row per image or one row per pairwise pick.
+// Both carry global Bradley-Terry scores (all picks) and the Compare tab's current ranking (compare_*).
+$("exportKind").onchange = () => { opts.exportKind = $("exportKind").value; saveOpts(); };
+$("exportCsv").onclick = () => {
+  const bt = fitBradleyTerry(state.library.map((r) => r.file), state.comparisons);
+  const compare = compareSnapshot();
+  const recs = records();
+  if (opts.exportKind === "comparisons") {
+    // Picks involving at least one image in the selection; the other image is described even if outside it.
+    const inSelection = new Set(recs.map((r) => r.file));
+    const picks = state.comparisons.filter((c) => inSelection.has(c.image_a) || inSelection.has(c.image_b));
+    const byFile = new Map(state.library.map((r) => [r.file, r]));
+    download(`comparisons-${stamp()}.csv`, comparisonsCSV(picks, { byFile, groupName, bt, compare }), "text/csv");
+  } else {
+    download(`images-${stamp()}.csv`, imagesCSV(recs, { groupName, bt, compare }), "text/csv");
+  }
+};
 
 on("library", () => isActive() && render());
 on("ratings", () => isActive() && render());

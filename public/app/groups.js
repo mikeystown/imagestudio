@@ -1,7 +1,7 @@
 // Groups: a template + pools + locks, plus every image generated while the group was active.
 // Stored on the server in data/groups.json; images carry the group id in their sidecar.
 
-import { store, state, api, emit, toast } from "./util.js";
+import { $, store, state, api, emit, toast, escapeHtml } from "./util.js";
 import { defaultPoolSet } from "../lib/defaults.js";
 
 export const groupList = () => state.groups?.groups || [];
@@ -75,4 +75,36 @@ export function renameGroup(id, name) {
   saveGroupsNow();
   emit("groups");
   return true;
+}
+
+// Dropdown of group checkboxes; none ticked means all groups. Markup: <details id> with <summary id="…Label">
+// and <div id="…Menu">. get() returns the ticked ids; set(ids) is called with the new list after each change.
+export function groupPicker(id, { get, set }) {
+  const root = $(id);
+  const menu = $(`${id}Menu`);
+  menu.addEventListener("change", (e) => {
+    const box = e.target;
+    let ids = [];
+    if (box.dataset.all === undefined) {
+      const chosen = new Set(get());
+      if (box.checked) chosen.add(box.value);
+      else chosen.delete(box.value);
+      ids = groupList().map((g) => g.id).filter((g) => chosen.has(g)); // keep group order
+    }
+    set(ids);
+  });
+  document.addEventListener("click", (e) => {
+    if (root.open && !root.contains(e.target)) root.open = false;
+  });
+  return {
+    // Drop ids of deleted groups (only once groups have loaded) and redraw. Returns the cleaned list.
+    render() {
+      const ids = get().filter((g) => isKnownGroup(g));
+      menu.innerHTML =
+        `<label class="check"><input type="checkbox" data-all ${ids.length ? "" : "checked"}> All groups</label>` +
+        groupList().map((g) => `<label class="check"><input type="checkbox" value="${escapeHtml(g.id)}" ${ids.includes(g.id) ? "checked" : ""}> ${escapeHtml(g.name)}</label>`).join("");
+      $(`${id}Label`).textContent = ids.length ? ids.map(groupName).join(" + ") : "All groups";
+      return ids;
+    },
+  };
 }

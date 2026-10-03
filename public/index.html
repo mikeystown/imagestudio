@@ -395,11 +395,18 @@
 <section id="tab-analysis" class="tab hidden">
   <div class="panel toolbar">
     <select id="aModel"></select>
-    <select id="aGroup" title="Group the stats and exports cover"></select>
+    <details class="multi" id="aGroups" title="Groups the stats and export cover (none ticked = all)">
+      <summary id="aGroupsLabel">All groups</summary>
+      <div class="menu" id="aGroupsMenu"></div>
+    </details>
     <select id="aBatch" title="Run within the group"></select>
     <label class="row desc">Flag below <input type="number" id="aMin" min="1" step="1" style="width:70px"> rated samples</label>
     <span class="row" style="margin-left:auto">
-      <button type="button" id="exportCsv" title="One row per image in this selection: rating, tags, notes, group, run, prompt, comparison scores and slot values">Export CSV</button>
+      <select id="exportKind" style="width:auto" title="What the CSV contains">
+        <option value="images">Images: one row per image</option>
+        <option value="comparisons">Comparisons: one row per pick</option>
+      </select>
+      <button type="button" id="exportCsv">Export CSV</button>
     </span>
   </div>
   <div class="tiles" id="aSummary"></div>

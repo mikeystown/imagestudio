@@ -86,13 +86,15 @@ export function toCSV(header, rows) {
 }
 
 // Flat per-image table with one column per slot. groupName maps a group id to its display name;
-// bt maps a file to its Bradley-Terry { score, se, n } from pairwise comparisons.
-export function imagesCSV(records, { groupName = (id) => id, bt = new Map() } = {}) {
+// bt maps a file to its Bradley-Terry { score, se, n } from all pairwise comparisons; compare maps a file to
+// its place in the Compare tab's current set { rank, cluster, score, se, n } (ranked only within that set).
+export function imagesCSV(records, { groupName = (id) => id, bt = new Map(), compare = new Map() } = {}) {
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
     "rating_1_7", "rating_label", "tags", "notes", "kind", "group", "batch_id", "batch_name", "parent", "template", "prompt",
     "bt_score", "bt_se", "n_comparisons",
+    "compare_rank", "compare_cluster", "compare_score", "compare_se", "compare_n",
     ...slots.map((s) => `slot_${s}`),
   ];
   const rows = records.map((r) => [
@@ -100,7 +102,48 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map() } = 
     isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "",
     (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
     bt.get(r.file)?.score?.toFixed(4), bt.get(r.file)?.se?.toFixed(4), bt.get(r.file)?.n ?? 0,
+    ...compareCells(compare.get(r.file)),
     ...slots.map((s) => r.picks?.[s]),
   ]);
   return toCSV(header, rows);
+}
+
+const compareCells = (c) => (c ? [c.rank, c.cluster, c.score?.toFixed(4), c.se?.toFixed(4), c.n] : ["", "", "", "", ""]);
+
+// One row per pairwise pick, with both images described side by side (a_* and b_*), so head-to-heads can be
+// analysed by group, rating, score or slot value. byFile maps a file to its library record.
+export function comparisonsCSV(comps, { byFile, groupName = (id) => id, bt = new Map(), compare = new Map() }) {
+  const rows = comps.filter((c) => byFile.has(c.image_a) && byFile.has(c.image_b))
+    .sort((x, y) => String(x.created_at).localeCompare(String(y.created_at)));
+  const slots = [...new Set(rows.flatMap((c) => [c.image_a, c.image_b]).flatMap((f) => Object.keys(byFile.get(f).picks || {})))].sort();
+  const sideHeader = (s) => [
+    `${s}_file`, `${s}_position`, `${s}_group`, `${s}_run`, `${s}_model`, `${s}_seed`, `${s}_rating_1_7`, `${s}_rating_label`, `${s}_tags`,
+    `${s}_bt_score`, `${s}_compare_rank`, `${s}_compare_cluster`, `${s}_compare_score`, `${s}_prompt`,
+    ...slots.map((x) => `${s}_slot_${x}`),
+  ];
+  const header = [
+    "id", "created_at", "session_id", "is_repeat", "matchup", "cross_group", "result", "a_won", "winner_file", "winner_group",
+    ...sideHeader("a"), ...sideHeader("b"),
+  ];
+  const side = (c, s) => {
+    const r = byFile.get(s === "a" ? c.image_a : c.image_b);
+    const cmp = compare.get(r.file);
+    return [
+      r.file, c.shown_left === s ? "left" : "right", groupName(r.group_id), r.batch_name || r.batch_id, r.model, r.seed,
+      isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "", (r.rating?.tags || []).join("; "),
+      bt.get(r.file)?.score?.toFixed(4), cmp?.rank, cmp?.cluster, cmp?.score?.toFixed(4), r.prompt,
+      ...slots.map((x) => r.picks?.[x]),
+    ];
+  };
+  const body = rows.map((c) => {
+    const [a, b] = [byFile.get(c.image_a), byFile.get(c.image_b)];
+    const winner = c.result === "a" ? a : c.result === "b" ? b : null;
+    return [
+      c.id, c.created_at, c.session_id, c.is_repeat,
+      [groupName(a.group_id), groupName(b.group_id)].sort().join(" vs "), a.group_id !== b.group_id,
+      c.result, c.result === "a" ? 1 : c.result === "b" ? 0 : 0.5, winner?.file ?? "tie", winner ? groupName(winner.group_id) : "tie",
+      ...side(c, "a"), ...side(c, "b"),
+    ];
+  });
+  return toCSV(header, body);
 }
