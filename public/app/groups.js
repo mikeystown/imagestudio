@@ -5,6 +5,8 @@ import { store, state, api, emit, toast } from "./util.js";
 import { defaultPoolSet } from "../lib/defaults.js";
 
 export const groupList = () => state.groups?.groups || [];
+// Until groups load, a saved group filter can't be checked, so it must not be discarded.
+export const isKnownGroup = (id) => !state.groups || groupList().some((g) => g.id === id);
 export const activeGroup = () => groupList().find((g) => g.id === state.groups.active) || groupList()[0];
 export const groupName = (id) => groupList().find((g) => g.id === id)?.name || id;
 

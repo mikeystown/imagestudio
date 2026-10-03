@@ -36,7 +36,7 @@ export const on = (ev, fn) => (listeners[ev] ??= []).push(fn);
 export const emit = (ev, data) => (listeners[ev] || []).forEach((fn) => fn(data));
 
 // Shared state: model list and the image library (all sidecars in outputs/).
-export const state = { models: [], library: [] };
+export const state = { models: [], library: [], comparisons: [] };
 
 export const modelName = (id) => state.models.find((m) => m.id === id)?.name || id;
 

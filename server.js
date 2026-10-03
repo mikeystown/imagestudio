@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { mergeCapabilities, filterParams } from "./public/lib/params.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -14,6 +15,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const OUTPUT_DIR = path.join(ROOT, "outputs");
 const POOL_DIR = path.join(ROOT, "data", "pool-sets");
 const GROUPS_FILE = path.join(ROOT, "data", "groups.json");
+const COMPARISONS_FILE = path.join(ROOT, "data", "comparisons.jsonl"); // append-only pick log
 const DEFAULT_GROUP = "default"; // images made before groups existed belong here
 const PORT = Number(process.env.PORT) || 5173;
 const API = "https://openrouter.ai/api/v1";
@@ -271,6 +273,66 @@ async function rate(req, res, name) {
   sendJson(res, 200, { rating });
 }
 
+// ---------- comparisons: data/comparisons.jsonl ----------
+// One JSON object per line: { id, image_a, image_b, result, shown_left, session_id, created_at, is_repeat }.
+// Image sidecars and ratings are never touched.
+async function readComparisons() {
+  const text = await fs.readFile(COMPARISONS_FILE, "utf8").catch(() => "");
+  const out = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line));
+    } catch {
+      console.error("Skipping malformed line in comparisons.jsonl");
+    }
+  }
+  return out;
+}
+
+async function comparisons(req, res, url) {
+  if (req.method === "GET") return sendJson(res, 200, { comparisons: await readComparisons() });
+
+  if (req.method === "POST") {
+    const { image_a, image_b, result, shown_left, session_id, is_repeat = false } = await readJson(req);
+    for (const name of [image_a, image_b]) {
+      const file = outputPath(name);
+      if (!file || !IMAGE_EXT.has(path.extname(file).toLowerCase())) throw httpError(400, "image_a and image_b must be output images");
+      await fs.access(file).catch(() => { throw httpError(404, `Image not found: ${name}`); });
+    }
+    if (image_a === image_b) throw httpError(400, "An image can't be compared with itself");
+    if (!["a", "b", "tie"].includes(result)) throw httpError(400, "result must be a, b or tie");
+    if (!["a", "b"].includes(shown_left)) throw httpError(400, "shown_left must be a or b");
+    if (typeof session_id !== "string" || !/^[\w-]{1,64}$/.test(session_id)) throw httpError(400, "Invalid session_id");
+    const record = { id: randomUUID(), image_a, image_b, result, shown_left, session_id, created_at: new Date().toISOString(), is_repeat: !!is_repeat };
+    await withSidecarLock(COMPARISONS_FILE, async () => {
+      await fs.mkdir(path.dirname(COMPARISONS_FILE), { recursive: true });
+      await fs.appendFile(COMPARISONS_FILE, JSON.stringify(record) + "\n");
+    });
+    return sendJson(res, 200, { comparison: record });
+  }
+
+  // Undo: remove the most recent pick of a session.
+  if (req.method === "DELETE" && url.pathname === "/api/comparisons/last") {
+    const session = url.searchParams.get("session");
+    if (!session) throw httpError(400, "session is required");
+    const removed = await withSidecarLock(COMPARISONS_FILE, async () => {
+      const all = await readComparisons();
+      let idx = -1;
+      for (let i = all.length - 1; i >= 0; i--) if (all[i].session_id === session) { idx = i; break; }
+      if (idx < 0) return null;
+      const [gone] = all.splice(idx, 1);
+      const tmp = `${COMPARISONS_FILE}.${process.pid}.tmp`;
+      await fs.writeFile(tmp, all.map((c) => JSON.stringify(c) + "\n").join(""));
+      await fs.rename(tmp, COMPARISONS_FILE);
+      return gone;
+    });
+    if (!removed) throw httpError(404, "Nothing to undo in this session");
+    return sendJson(res, 200, { removed });
+  }
+  throw httpError(405, "Method not allowed");
+}
+
 // ---------- groups: data/groups.json ----------
 // { active, groups: [{ id, name, created_at, template, pools, locks }] }. A group bundles a template with
 // its pools and every image generated while it was active. template null = not set up yet (client fills it).
@@ -368,6 +430,7 @@ http
       if (req.method === "GET" && pathname === "/api/library") return await library(res);
       if (req.method === "POST" && pathname.startsWith("/api/rating/")) return await rate(req, res, tail("/api/rating/"));
       if (pathname === "/api/groups") return await groups(req, res);
+      if (pathname === "/api/comparisons" || pathname === "/api/comparisons/last") return await comparisons(req, res, new URL(req.url, "http://localhost"));
       if (pathname === "/api/pool-sets" || pathname.startsWith("/api/pool-sets/")) return await poolSets(req, res, tail("/api/pool-sets/") || "");
       if (req.method === "GET") return await serveStatic(req, res);
       sendJson(res, 405, { error: { message: "Method not allowed" } });

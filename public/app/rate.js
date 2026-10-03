@@ -4,7 +4,7 @@ import { $, store, state, api, getCaps, escapeHtml, imgSrc, fmtCost, addRecords,
 import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
 import { postImage } from "./batch.js";
 import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
-import { activeGroup, groupList, groupName } from "./groups.js";
+import { activeGroup, groupList, groupName, isKnownGroup } from "./groups.js";
 
 const KINDS = ["batch", "single", "reproduce", "reference", "blend"];
 let filters = { group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", ...store.get("rate:filters", {}) };
@@ -32,7 +32,7 @@ function renderFilterOptions() {
   const models = [...new Set(lib.map((r) => r.model))].sort();
   const slots = [...new Set(lib.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const slotValues = filters.slot ? [...new Set(lib.map((r) => r.picks?.[filters.slot]).filter(Boolean))].sort() : [];
-  if (filters.group && !groupList().some((g) => g.id === filters.group)) filters.group = "";
+  if (filters.group && !isKnownGroup(filters.group)) filters.group = "";
   $("fGroup").innerHTML = `<option value="">All groups</option>` +
     groupList().map((g) => `<option value="${escapeHtml(g.id)}" ${filters.group === g.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("");
   $("fRating").innerHTML =

@@ -93,7 +93,7 @@ test("listBatches groups by batch id, newest first, with names and counts", () =
 
 test("imagesCSV only has slot columns used by the exported rows", () => {
   const header = imagesCSV([{ file: "x", picks: { face: "oval" } }]).split("\r\n")[0];
-  assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,slot_face"));
+  assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,bt_score,bt_se,n_comparisons,slot_face"));
 });
 
 test("exportRecord gives the rating as a 1–7 score and drops in-app fields", () => {
