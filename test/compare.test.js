@@ -265,3 +265,14 @@ test("recordOf counts an image's wins, losses and ties from either side", () => 
   assert.deepEqual(recordOf("A", comps), { wins: 1, losses: 2, ties: 1 });
   assert.deepEqual(recordOf("Z", comps), { wins: 0, losses: 0, ties: 0 });
 });
+
+test("exports mark starred images", () => {
+  const starred = (f) => f === "x.jpg";
+  const [h, x, y] = imagesCSV([{ file: "x.jpg" }, { file: "y.jpg" }], { starred }).trim().split("\r\n").map((l) => l.split(","));
+  assert.equal(x[h.indexOf("starred")], "true");
+  assert.equal(y[h.indexOf("starred")], "false");
+  const byFile = new Map([["x.jpg", { file: "x.jpg", group_id: "g" }], ["y.jpg", { file: "y.jpg", group_id: "g" }]]);
+  const [ch, row] = comparisonsCSV([cmp("y.jpg", "x.jpg", "a")], { byFile, starred }).trim().split("\r\n").map((l) => l.split(","));
+  assert.equal(row[ch.indexOf("a_starred")], "false");
+  assert.equal(row[ch.indexOf("b_starred")], "true");
+});

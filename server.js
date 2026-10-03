@@ -16,6 +16,7 @@ const OUTPUT_DIR = path.join(ROOT, "outputs");
 const POOL_DIR = path.join(ROOT, "data", "pool-sets");
 const GROUPS_FILE = path.join(ROOT, "data", "groups.json");
 const COMPARISONS_FILE = path.join(ROOT, "data", "comparisons.jsonl"); // append-only pick log
+const STARS_FILE = path.join(ROOT, "data", "stars.json"); // { stars: { file: starred_at } }
 const DEFAULT_GROUP = "default"; // images made before groups existed belong here
 const PORT = Number(process.env.PORT) || 5173;
 const API = "https://openrouter.ai/api/v1";
@@ -333,6 +334,32 @@ async function comparisons(req, res, url) {
   throw httpError(405, "Method not allowed");
 }
 
+// ---------- stars ("key picks"): data/stars.json ----------
+// Kept apart from image sidecars so starring never touches image records or ratings.
+async function readStars() {
+  const text = await fs.readFile(STARS_FILE, "utf8").catch(() => null);
+  return text ? JSON.parse(text).stars || {} : {};
+}
+
+async function stars(req, res, name) {
+  if (req.method === "GET" && !name) return sendJson(res, 200, { stars: await readStars() });
+  if (req.method !== "PUT" || !name) throw httpError(405, "Method not allowed");
+  const file = outputPath(name);
+  if (!file || !IMAGE_EXT.has(path.extname(file).toLowerCase())) throw httpError(400, "Invalid image name");
+  await fs.access(file).catch(() => { throw httpError(404, "Image not found"); });
+  const { starred } = await readJson(req);
+  if (typeof starred !== "boolean") throw httpError(400, "starred must be true or false");
+  const updated = await withSidecarLock(STARS_FILE, async () => {
+    const all = await readStars();
+    if (starred) all[name] ??= new Date().toISOString();
+    else delete all[name];
+    await fs.mkdir(path.dirname(STARS_FILE), { recursive: true });
+    await writeJsonAtomic(STARS_FILE, { stars: all });
+    return all[name] ?? null;
+  });
+  sendJson(res, 200, { file: name, starred_at: updated });
+}
+
 // ---------- groups: data/groups.json ----------
 // { active, groups: [{ id, name, created_at, template, pools, locks }] }. A group bundles a template with
 // its pools and every image generated while it was active. template null = not set up yet (client fills it).
@@ -432,6 +459,7 @@ http
       if (req.method === "GET" && pathname === "/api/library") return await library(res);
       if (req.method === "POST" && pathname.startsWith("/api/rating/")) return await rate(req, res, tail("/api/rating/"));
       if (pathname === "/api/groups") return await groups(req, res);
+      if (pathname === "/api/stars" || pathname.startsWith("/api/stars/")) return await stars(req, res, tail("/api/stars/"));
       if (pathname === "/api/comparisons" || pathname === "/api/comparisons/last") return await comparisons(req, res, new URL(req.url, "http://localhost"));
       if (pathname === "/api/pool-sets" || pathname.startsWith("/api/pool-sets/")) return await poolSets(req, res, tail("/api/pool-sets/") || "");
       if (req.method === "GET") return await serveStatic(req, res);

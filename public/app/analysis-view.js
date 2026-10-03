@@ -4,6 +4,7 @@ import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName,
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
 import { groupName, groupPicker } from "./groups.js";
 import { compareSnapshot } from "./compare-view.js";
+import { isStarred } from "./stars.js";
 import { fitBradleyTerry } from "../lib/compare.js";
 import { slotStats, modelStats, overallStats, imagesCSV, comparisonsCSV, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
@@ -150,9 +151,9 @@ $("exportCsv").onclick = () => {
     const inSelection = new Set(recs.map((r) => r.file));
     const picks = state.comparisons.filter((c) => inSelection.has(c.image_a) || inSelection.has(c.image_b));
     const byFile = new Map(state.library.map((r) => [r.file, r]));
-    download(`comparisons-${stamp()}.csv`, comparisonsCSV(picks, { byFile, groupName, bt, compare }), "text/csv");
+    download(`comparisons-${stamp()}.csv`, comparisonsCSV(picks, { byFile, groupName, bt, compare, starred: isStarred }), "text/csv");
   } else {
-    download(`images-${stamp()}.csv`, imagesCSV(recs, { groupName, bt, compare }), "text/csv");
+    download(`images-${stamp()}.csv`, imagesCSV(recs, { groupName, bt, compare, starred: isStarred }), "text/csv");
   }
 };
 

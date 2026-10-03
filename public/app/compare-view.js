@@ -6,6 +6,7 @@ import { listBatches } from "../lib/analysis.js";
 import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET, sample, crossWinRate, components, rankWithinClusters, recordOf } from "../lib/compare.js";
 import { groupList, groupName, isKnownGroup, groupPicker } from "./groups.js";
 import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
+import { isStarred, toggleStar } from "./stars.js";
 
 // minScore 0 = any image, including unrated.
 // mix: blend in a fixed random sample of 7s from elsewhere. from: "" off, "*" other groups, or a group id.
@@ -318,7 +319,9 @@ document.addEventListener("keydown", (e) => {
   const k = e.key;
   if (k === "ArrowDown" || k === "ArrowRight" || k === "j") stepRank(1);
   else if (k === "ArrowUp" || k === "ArrowLeft" || k === "k") stepRank(-1);
-  else if (k === "f" || k === " ") {
+  else if (k === "c") {
+    if (rankSel) toggleStar(rankSel);
+  } else if (k === "f" || k === " ") {
     const r = rankRow(rankSel);
     if (lightboxOpen()) closeLightbox();
     else if (r) openLightbox(r.f, rankCaption(r));
@@ -404,7 +407,7 @@ function renderRanking() {
       <thead><tr><th class="num">#</th>${split ? "<th>Cluster</th>" : ""}<th></th><th class="num">Score</th><th class="num">± SE</th><th class="num">Comparisons</th><th class="num">Rating</th>${mixing ? "<th>Source</th>" : ""}<th>Group</th></tr></thead>
       <tbody>${rows.map((r) => `
         <tr data-file="${escapeHtml(r.f)}" class="${r.f === rankSel ? "sel" : ""}">
-          <td class="num">${r.score == null ? "–" : r.rank}</td>
+          <td class="num">${isStarred(r.f) ? '<span title="Starred" style="color:#c98a00">★</span> ' : ""}${r.score == null ? "–" : r.rank}</td>
           ${split ? `<td class="desc">${r.cluster === Infinity ? "" : `C${r.cluster}`}</td>` : ""}
           <td class="thumb"><img loading="lazy" src="${imgSrc(r.f)}" alt=""></td>
           <td class="num">${r.score == null ? '<span class="desc">not compared</span>' : r.score.toFixed(2)}</td>
@@ -483,11 +486,12 @@ function renderRankDetail() {
     ${picks.length ? `<table class="picks">${picks.map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join("")}</table>` : '<p class="desc">No slot values (not made from a template).</p>'}
     <p class="prompt">${escapeHtml(rec.prompt || "")}</p>
     <div class="row wrap">
+      <button type="button" data-act="star" class="${isStarred(r.f) ? "starred" : ""}" title="Save as a key pick">${isStarred(r.f) ? "★ Starred" : "☆ Star"} <kbd>c</kbd></button>
       <button type="button" data-act="full">Full size <kbd>f</kbd></button>
       <button type="button" data-act="rate" title="Open this image in the Rate tab">Show in Rate</button>
       <button type="button" data-act="lock" ${picks.length ? "" : "disabled"} title="Lock these slot values in the Batch template">Use these slot values in Batch</button>
     </div>
-    <p class="desc">↑/↓ (or ←/→, j/k) move through the ranking · f or Space for full size.</p>`;
+    <p class="desc">↑/↓ (or ←/→, j/k) move through the ranking · c star · f or Space for full size.</p>`;
 }
 
 $("cRankList").addEventListener("click", (e) => {
@@ -502,6 +506,7 @@ $("cRankDetail").addEventListener("click", (e) => {
   if (!el) return;
   if (el.dataset.step) stepRank(Number(el.dataset.step));
   else if (el.dataset.act === "full") openLightbox(r.f, rankCaption(r));
+  else if (el.dataset.act === "star") toggleStar(r.f);
   else if (el.dataset.act === "rate") emit("show-image", r.f);
   else if (el.dataset.act === "lock") { emit("lock-picks", r.rec.picks); emit("tab", "batch"); }
 });
@@ -520,6 +525,7 @@ document.querySelectorAll("#cView button").forEach((b) => (b.onclick = () => set
 on("ratings", () => isActive() && !busy && rebuild());
 on("library", () => isActive() && !busy && rebuild());
 on("groups", () => isActive() && renderFilters());
+on("stars", () => isActive() && opts.view === "ranking" && renderRanking());
 on("tab-shown", (name) => ready && name === "compare" && rebuild());
 
 // The Compare set as the Ranking view shows it, for exports: Map file -> { rank, cluster, score, se, n }.

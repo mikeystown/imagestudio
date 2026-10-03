@@ -7,6 +7,7 @@ import { initRate } from "./rate.js";
 import { initAnalysis } from "./analysis-view.js";
 import { initCompare } from "./compare-view.js";
 import { loadGroups } from "./groups.js";
+import { loadStars } from "./stars.js";
 import { defaultPoolSet } from "../lib/defaults.js";
 
 const TABS = ["generate", "batch", "rate", "compare", "analysis"];
@@ -37,6 +38,7 @@ async function start() {
     toast("Could not load comparisons: " + e.message, true);
     return [];
   });
+  await loadStars().catch((e) => toast("Could not load starred images: " + e.message, true));
   await loadGroups().catch((e) => {
     // Keep the app usable with an unsaved in-memory group.
     state.groups = { active: "default", groups: [{ id: "default", name: "Group 1", ...(store.get("batch:set", null) || defaultPoolSet()) }] };

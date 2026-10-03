@@ -5,9 +5,11 @@ import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
 import { postImage } from "./batch.js";
 import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
 import { activeGroup, groupList, groupName, isKnownGroup } from "./groups.js";
+import { isStarred, toggleStar } from "./stars.js";
+import { globalScores } from "./pairwise.js";
 
 const KINDS = ["batch", "single", "reproduce", "reference", "blend"];
-let filters = { group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", ...store.get("rate:filters", {}) };
+let filters = { group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", starredOnly: false, ...store.get("rate:filters", {}) };
 let autoAdvance = store.get("rate:autoAdvance", true);
 let list = []; // filtered + sorted snapshot; ratings change in place without re-filtering
 let current = null; // file name
@@ -20,7 +22,7 @@ export function initRate() {
   $("rateKeys").innerHTML =
     `<b>←/→</b> or <b>h/l</b> move · <b>↑/↓</b> or <b>k/j</b> row · <b>1–7</b> rate · <b>0</b> clear · ` +
     TAGS.map((t, i) => `<b>${TAG_KEYS[i]}</b> ${escapeHtml(t)}`).join(" · ") +
-    ` · <b>n</b> notes · <b>x</b> select for blend · <b>f</b>/<b>Space</b> full size (click to zoom to 100%) · <b>Esc</b> close / leave notes`;
+    ` · <b>c</b> star · <b>n</b> notes · <b>x</b> select for blend · <b>f</b>/<b>Space</b> full size (click to zoom to 100%) · <b>Esc</b> close / leave notes`;
   $("autoAdvance").checked = autoAdvance;
   renderFilterOptions();
   refilter();
@@ -47,12 +49,14 @@ function renderFilterOptions() {
   $("fSlotValue").disabled = !filters.slot;
   $("fKind").innerHTML = optionsHtml(KINDS, filters.kind, { blank: "All kinds" });
   $("fSort").value = filters.sort;
+  $("fStarred").checked = !!filters.starredOnly;
 }
 
 function matches(r) {
   const f = filters;
   const v = r.rating?.value;
   if (f.group && r.group_id !== f.group) return false;
+  if (f.starredOnly && !isStarred(r.file)) return false;
   if (f.rating === "unrated" && isRated(r)) return false;
   if (f.rating === "rated" && !isRated(r)) return false;
   if (f.rating === "solid" && !(isRated(r) && v >= SOLID)) return false;
@@ -71,6 +75,11 @@ const SORTS = {
   ratingDesc: (a, b) => (b.rating?.value ?? -1) - (a.rating?.value ?? -1) || SORTS.newest(a, b),
   ratingAsc: (a, b) => (a.rating?.value ?? 99) - (b.rating?.value ?? 99) || SORTS.newest(a, b),
   model: (a, b) => String(a.model).localeCompare(String(b.model)) || SORTS.newest(a, b),
+  // Bradley-Terry score from all pairwise picks; images never compared go last.
+  pairwise: (a, b) => {
+    const s = globalScores();
+    return (s.get(b.file)?.score ?? -Infinity) - (s.get(a.file)?.score ?? -Infinity) || SORTS.newest(a, b);
+  },
 };
 
 function refilter() {
@@ -114,10 +123,27 @@ on("rate-filter", (f) => {
 // Group names or the group list changed.
 on("groups", () => renderFilterOptions());
 
+$("fStarred").onchange = () => {
+  filters.starredOnly = $("fStarred").checked;
+  refilter();
+};
+
+// A star changed (here or in Compare): redraw that image's badge and button.
+on("stars", (file) => {
+  updateFigure(file);
+  if (file === current) renderDetail();
+});
+
+// "0.58 ± 0.60 (12 picks)" from all pairwise picks, or "not compared".
+function pairwiseText(file) {
+  const s = globalScores().get(file);
+  return s?.score == null ? "not compared" : `${s.score.toFixed(2)} ± ${s.se.toFixed(2)} (${s.n} picks)`;
+}
+
 on("show-image", (file) => {
   emit("tab", "rate");
   if (!list.some((r) => r.file === file)) {
-    filters = { ...filters, group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "" };
+    filters = { ...filters, group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", starredOnly: false };
     renderFilterOptions();
     refilter();
   }
@@ -132,6 +158,7 @@ function figureHtml(r) {
       <img loading="lazy" src="${imgSrc(r.file)}" alt="">
       <span class="rbadge ${rated ? `r${r.rating.value}` : "none"}">${rated ? r.rating.value + 1 : "–"}</span>
       ${blendSel.has(r.file) ? `<span class="bbadge">${[...blendSel].indexOf(r.file) + 1}</span>` : ""}
+      ${isStarred(r.file) ? '<span class="sbadge" title="Starred">★</span>' : ""}
     </figure>`;
 }
 
@@ -234,6 +261,7 @@ function renderDetail() {
     <textarea id="rateNotes" placeholder="Notes (n)…" rows="2">${escapeHtml(r.rating?.notes || "")}</textarea>
     <div class="row wrap">
       <button type="button" data-act="reproduce" title="Same model, prompt and seed at a chosen resolution">Reproduce</button>
+      <button type="button" data-act="star" class="${isStarred(r.file) ? "starred" : ""}" title="Save as a key pick">${isStarred(r.file) ? "★ Starred" : "☆ Star"} <kbd>c</kbd></button>
       <button type="button" data-act="reference" title="Send this image as a reference with an edit prompt">Use as reference</button>
       <button type="button" data-act="blend-toggle">${blendSel.has(r.file) ? "Unselect for blend" : "Select for blend"} <kbd>x</kbd></button>
       <button type="button" data-act="lock" ${picks.length ? "" : "disabled"} title="Copy this image's slot picks into the Batch template as locked values">Lock picks</button>
@@ -246,6 +274,7 @@ function renderDetail() {
       ${r.aspect_ratio ? `<span>aspect: <b>${escapeHtml(r.aspect_ratio)}</b></span>` : ""}
       <span>cost: <b>${fmtCost(r.cost)}</b></span>
       <span>kind: <b>${escapeHtml(r.kind || "single")}</b></span>
+      <span>pairwise: <b>${pairwiseText(r.file)}</b></span>
       <span>group: <b>${escapeHtml(groupName(r.group_id))}</b></span>
       <span>${escapeHtml(new Date(r.created_at).toLocaleString())}</span>
       ${r.parent ? `<span style="flex-basis:100%">from: ${[].concat(r.parent).map((p) => `<a href="#" data-goto="${escapeHtml(p)}">${escapeHtml(p)}</a>`).join(", ")}</span>` : ""}
@@ -269,6 +298,7 @@ $("rateDetail").addEventListener("click", (e) => {
   if (act === "reference") openAction("reference", [r]);
   if (act === "blend-toggle") { toggleBlend(r.file); renderDetail(); }
   if (act === "lock") { emit("lock-picks", r.picks); emit("tab", "batch"); }
+  if (act === "star") toggleStar(r.file);
 });
 
 async function saveRating(r, patch) {
@@ -318,6 +348,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "f" || k === " ") lightboxOpen() ? closeLightbox() : openFull();
   else if (k === "n") { closeLightbox(); $("rateNotes")?.focus(); }
   else if (k === "x") { toggleBlend(r.file); renderDetail(); }
+  else if (k === "c") toggleStar(r.file);
   else return;
   e.preventDefault();
 });

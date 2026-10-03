@@ -106,6 +106,8 @@
   .rgrid figure.blend img { outline: 3px dashed var(--warn); outline-offset: -3px; }
   .rbadge, .bbadge { position: absolute; top: 6px; left: 6px; min-width: 22px; text-align: center; font-weight: 700; font-size: 12px; padding: 1px 6px; border-radius: 99px; background: #000a; color: #fff; }
   .bbadge { left: auto; right: 6px; background: var(--warn); }
+  .sbadge { position: absolute; bottom: 8px; left: 6px; font-size: 16px; line-height: 1; color: #ffc940; text-shadow: 0 0 3px #000, 0 0 6px #000; }
+  button.starred { color: #c98a00; border-color: #c98a00; }
   .rbadge.none { opacity: .6; }
   .rbadge.r4, .rbadge.r5, .rbadge.r6 { background: var(--accent); color: var(--accent-text); }
   #rateDetail { display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 140px); overflow: auto; }
@@ -340,8 +342,10 @@
       <option value="oldest">Oldest first</option>
       <option value="ratingDesc">Rating high → low</option>
       <option value="ratingAsc">Rating low → high</option>
+      <option value="pairwise">Pairwise score high → low</option>
       <option value="model">Model</option>
     </select>
+    <label class="check" title="Show only starred key picks"><input type="checkbox" id="fStarred"> ★ Starred only</label>
     <label class="check"><input type="checkbox" id="autoAdvance"> Auto-advance after rating</label>
     <button type="button" id="reloadLib">Reload</button>
     <span class="desc" id="rateCount"></span>
