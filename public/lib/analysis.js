@@ -1,13 +1,14 @@
 // Which prompt features predict high ratings. Records are image sidecars as returned by /api/library.
+// All means and exports use the 1–7 score (see scoreOf), not the stored 0–6 value.
 
-import { RATINGS, SOLID, isRated } from "./ratings.js";
+import { RATINGS, SOLID_SCORE, isRated, scoreOf } from "./ratings.js";
 
 export const DEFAULT_MIN_SAMPLES = 5;
 
-function summarize(values) {
-  const count = values.length;
-  const mean = count ? values.reduce((s, v) => s + v, 0) / count : null;
-  const solidShare = count ? values.filter((v) => v >= SOLID).length / count : null;
+function summarize(scores) {
+  const count = scores.length;
+  const mean = count ? scores.reduce((s, v) => s + v, 0) / count : null;
+  const solidShare = count ? scores.filter((v) => v >= SOLID_SCORE).length / count : null;
   return { count, mean, solidShare };
 }
 
@@ -15,7 +16,7 @@ const byMeanDesc = (a, b) => (b.mean ?? -1) - (a.mean ?? -1) || b.count - a.coun
 
 // Overall summary across rated images.
 export function overallStats(records) {
-  return summarize(records.filter(isRated).map((r) => r.rating.value));
+  return summarize(records.filter(isRated).map(scoreOf));
 }
 
 // For each slot and option: count, mean rating, share >= Solid beautiful, and a low-sample flag.
@@ -25,14 +26,14 @@ export function slotStats(records, { minSamples = DEFAULT_MIN_SAMPLES } = {}) {
   for (const r of records) {
     if (!isRated(r) || !r.picks) continue;
     for (const [slot, option] of Object.entries(r.picks)) {
-      ((groups[slot] ??= {})[option] ??= []).push(r.rating.value);
+      ((groups[slot] ??= {})[option] ??= []).push(scoreOf(r));
     }
   }
   const out = {};
   for (const slot of Object.keys(groups).sort()) {
     out[slot] = Object.entries(groups[slot])
-      .map(([option, values]) => {
-        const s = summarize(values);
+      .map(([option, scores]) => {
+        const s = summarize(scores);
         return { option, ...s, lowSample: s.count < minSamples };
       })
       .sort(byMeanDesc);
@@ -52,7 +53,7 @@ export function modelStats(records, { topTags = 5 } = {}) {
         .map(([tag, count]) => ({ tag, count, share: count / recs.length }))
         .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
         .slice(0, topTags);
-      return { model, ...summarize(recs.map((r) => r.rating.value)), tags };
+      return { model, ...summarize(recs.map(scoreOf)), tags };
     })
     .sort(byMeanDesc);
 }
@@ -89,12 +90,12 @@ export function imagesCSV(records) {
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
-    "rating", "rating_label", "tags", "notes", "kind", "batch_id", "batch_name", "parent", "template", "prompt",
+    "rating_1_7", "rating_label", "tags", "notes", "kind", "batch_id", "batch_name", "parent", "template", "prompt",
     ...slots.map((s) => `slot_${s}`),
   ];
   const rows = records.map((r) => [
     r.file, r.created_at, r.model, r.seed, r.resolution, r.aspect_ratio, r.cost,
-    isRated(r) ? r.rating.value : "", isRated(r) ? RATINGS[r.rating.value] : "",
+    isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "",
     (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
     ...slots.map((s) => r.picks?.[s]),
   ]);
@@ -105,7 +106,17 @@ export function slotStatsCSV(stats) {
   const rows = Object.entries(stats).flatMap(([slot, opts]) =>
     opts.map((o) => [slot, o.option, o.count, o.mean?.toFixed(3), o.solidShare?.toFixed(3), o.lowSample]),
   );
-  return toCSV(["slot", "option", "count", "mean_rating", "share_solid_or_above", "low_sample"], rows);
+  return toCSV(["slot", "option", "count", "mean_rating_1_7", "share_solid_or_above", "low_sample"], rows);
+}
+
+// Image record for JSONL export: rating as a 1–7 score with its label, no in-app bookkeeping fields.
+export function exportRecord(r) {
+  const out = Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith("_")));
+  if (r.rating) {
+    const { value, ...rest } = r.rating;
+    out.rating = isRated(r) ? { score: scoreOf(r), label: RATINGS[value], ...rest } : { score: null, ...rest };
+  }
+  return out;
 }
 
 export function toJSONL(items) {

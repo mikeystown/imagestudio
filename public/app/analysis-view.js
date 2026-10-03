@@ -2,7 +2,7 @@
 
 import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
-import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
+import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, exportRecord, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
 // batch: "" = all images, "*" = every batch image, otherwise one batch id.
 let opts = { model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
@@ -37,7 +37,8 @@ function renderBatchOptions() {
 
 const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
 const avg = (x) => (x == null ? "—" : x.toFixed(2));
-const ratingName = (x) => (x == null ? "" : RATINGS[Math.round(x)]);
+// x is a 1–7 score.
+const ratingName = (x) => (x == null ? "" : RATINGS[Math.round(x) - 1]);
 
 export function render() {
   renderBatchOptions();
@@ -62,13 +63,13 @@ export function render() {
       <div class="panel">
         <h2>{${escapeHtml(slot)}}</h2>
         <table class="stats">
-          <thead><tr><th>Option</th><th class="num">n</th><th class="num">Avg (0–6)</th><th></th><th class="num">≥ Solid</th></tr></thead>
+          <thead><tr><th>Option</th><th class="num">n</th><th class="num">Avg (1–7)</th><th></th><th class="num">≥ Solid</th></tr></thead>
           <tbody>${rows.map((r) => `
             <tr class="${r.lowSample ? "low" : ""}" data-slot="${escapeHtml(slot)}" data-value="${escapeHtml(r.option)}" title="Show these images in Rate">
               <td>${escapeHtml(r.option)}${r.lowSample ? ` <span class="badge dim" title="Fewer than ${opts.minSamples} rated images, so not reliable yet">few samples</span>` : ""}</td>
               <td class="num">${r.count}</td>
               <td class="num">${avg(r.mean)}</td>
-              <td class="barcell"><div class="bar" style="width:${((r.mean ?? 0) / 6) * 100}%"></div></td>
+              <td class="barcell"><div class="bar" style="width:${(((r.mean ?? 1) - 1) / 6) * 100}%"></div></td>
               <td class="num">${pct(r.solidShare)}</td>
             </tr>`).join("")}</tbody>
         </table>
@@ -111,7 +112,7 @@ function stamp() {
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 }
 $("exImagesCsv").onclick = () => download(`images-${stamp()}.csv`, imagesCSV(records()), "text/csv");
-$("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records()), "application/x-ndjson");
+$("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records().map(exportRecord)), "application/x-ndjson");
 $("exSlotsCsv").onclick = () => download(`slot-stats-${stamp()}.csv`, slotStatsCSV(slotStats(records(), { minSamples: opts.minSamples })), "text/csv");
 $("exStatsJsonl").onclick = () => {
   const recs = records();
