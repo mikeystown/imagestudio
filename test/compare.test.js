@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, comparisonsCSV, PHASE1_TARGET } from "../public/lib/compare.js";
+import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET } from "../public/lib/compare.js";
 import { imagesCSV } from "../public/lib/analysis.js";
 
 let nextId = 0;
@@ -134,13 +134,6 @@ test("progress counts images at the target", () => {
   const comps = [...times(4, () => cmp("A", "B", "a"))];
   assert.deepEqual(progress(["A", "B", "C"], comps, 4), { images: 3, reached: 2, fraction: 8 / 12 });
   assert.equal(withinSet([cmp("A", "Z", "a"), cmp("A", "B", "a")], ["A", "B"]).length, 1);
-});
-
-test("comparisonsCSV writes winner and left/right images", () => {
-  const csv = comparisonsCSV([cmp("A", "B", "b", { shown_left: "b", id: "x1", created_at: "t" })]);
-  const [header, row] = csv.trim().split("\r\n");
-  assert.equal(header, "id,created_at,session_id,image_a,image_b,result,winner,shown_left,left_image,right_image,is_repeat");
-  assert.equal(row, "x1,t,s,A,B,b,B,b,B,A,false");
 });
 
 test("imagesCSV carries bt_score, bt_se and n_comparisons next to the slot columns", () => {

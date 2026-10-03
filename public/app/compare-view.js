@@ -1,9 +1,9 @@
 // Compare tab: blind pairwise comparisons with Bradley-Terry scores, alongside (not replacing) 1-7 ratings.
 
-import { $, store, state, api, escapeHtml, imgSrc, on, toast, download, typingInField } from "./util.js";
+import { $, store, state, api, escapeHtml, imgSrc, on, toast, typingInField } from "./util.js";
 import { RATINGS, isRated, scoreOf } from "../lib/ratings.js";
 import { listBatches } from "../lib/analysis.js";
-import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, comparisonsCSV, countComparisons, PHASE1_TARGET } from "../lib/compare.js";
+import { withinSet, fitBradleyTerry, choosePair, progress, selfAgreement, pairKey, countComparisons, PHASE1_TARGET } from "../lib/compare.js";
 import { groupList, groupName, isKnownGroup } from "./groups.js";
 import { openLightbox, lightboxOpen } from "./lightbox.js";
 
@@ -234,9 +234,6 @@ function setView(view) {
   if (view === "ranking") renderRanking();
 }
 document.querySelectorAll("#cView button").forEach((b) => (b.onclick = () => setView(b.dataset.view)));
-
-$("cExport").onclick = () =>
-  download(`comparisons-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`, comparisonsCSV(state.comparisons), "text/csv");
 
 // Ratings, new images or group changes can change which images are in the set.
 on("ratings", () => isActive() && !busy && rebuild());

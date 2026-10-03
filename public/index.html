@@ -357,7 +357,6 @@
         <button type="button" data-view="compare" class="on">Compare</button>
         <button type="button" data-view="ranking">Ranking</button>
       </span>
-      <button type="button" id="cExport" title="Every pairwise pick, all groups">comparisons.csv</button>
     </span>
   </div>
   <div class="progress"><div id="cBar"></div></div>
@@ -382,12 +381,7 @@
     <select id="aBatch" title="Run within the group"></select>
     <label class="row desc">Flag below <input type="number" id="aMin" min="1" step="1" style="width:70px"> rated samples</label>
     <span class="row" style="margin-left:auto">
-      <span class="desc">Export:</span>
-      <button type="button" id="exImagesCsv">images.csv</button>
-      <button type="button" id="exImagesJsonl">images.jsonl</button>
-      <button type="button" id="exSlotsCsv">slot-stats.csv</button>
-      <button type="button" id="exStatsJsonl">analysis.jsonl</button>
-      <button type="button" id="exComparisonsCsv" title="Pairwise picks between images in this selection">comparisons.csv</button>
+      <button type="button" id="exportCsv" title="One row per image in this selection: rating, tags, notes, group, run, prompt, comparison scores and slot values">Export CSV</button>
     </span>
   </div>
   <div class="tiles" id="aSummary"></div>

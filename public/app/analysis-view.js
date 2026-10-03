@@ -3,8 +3,8 @@
 import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
 import { groupList, groupName, isKnownGroup } from "./groups.js";
-import { fitBradleyTerry, comparisonsCSV, withinSet } from "../lib/compare.js";
-import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, exportRecord, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
+import { fitBradleyTerry } from "../lib/compare.js";
+import { slotStats, modelStats, overallStats, imagesCSV, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
 // group: "" = all groups, else a group id. batch: "" = all runs (in the group), else one run's batch id.
 let opts = { group: "", model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
@@ -127,21 +127,9 @@ function stamp() {
   if (opts.group) return `group-${slug(groupName(opts.group)) || opts.group}`;
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 }
-$("exImagesCsv").onclick = () => download(`images-${stamp()}.csv`, imagesCSV(records(), { groupName, bt: fitBradleyTerry(state.library.map((r) => r.file), state.comparisons) }), "text/csv");
-$("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records().map((r) => ({ ...exportRecord(r), group: groupName(r.group_id) }))), "application/x-ndjson");
-$("exSlotsCsv").onclick = () => download(`slot-stats-${stamp()}.csv`, slotStatsCSV(slotStats(records(), { minSamples: opts.minSamples })), "text/csv");
-// Picks between two images that are both in the current selection.
-$("exComparisonsCsv").onclick = () =>
-  download(`comparisons-${stamp()}.csv`, comparisonsCSV(withinSet(state.comparisons, records().map((r) => r.file))), "text/csv");
-$("exStatsJsonl").onclick = () => {
-  const recs = records();
-  const rows = [
-    { type: "overall", ...overallStats(recs) },
-    ...Object.entries(slotStats(recs, { minSamples: opts.minSamples })).flatMap(([slot, list]) => list.map((r) => ({ type: "slot_option", slot, ...r }))),
-    ...modelStats(recs).map((m) => ({ type: "model", ...m })),
-  ];
-  download(`analysis-${stamp()}.jsonl`, toJSONL(rows), "application/x-ndjson");
-};
+// The single export: one row per image in the current selection.
+$("exportCsv").onclick = () =>
+  download(`images-${stamp()}.csv`, imagesCSV(records(), { groupName, bt: fitBradleyTerry(state.library.map((r) => r.file), state.comparisons) }), "text/csv");
 
 on("library", () => isActive() && render());
 on("ratings", () => isActive() && render());

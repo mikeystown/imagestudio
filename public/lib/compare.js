@@ -1,8 +1,6 @@
-// Pairwise comparisons: pairing, Bradley-Terry scoring, self-agreement and export.
+// Pairwise comparisons: pairing, Bradley-Terry scoring and self-agreement.
 // A comparison is { id, image_a, image_b, result: "a"|"b"|"tie", shown_left: "a"|"b", session_id, created_at, is_repeat }.
 // Pure functions: used by the browser and by the Node tests.
-
-import { toCSV } from "./analysis.js";
 
 export const PHASE1_TARGET = 3; // spread matchups evenly until every image has this many
 export const REPEAT_RATE = 0.05; // share of picks that re-show an already judged pair
@@ -179,13 +177,4 @@ export function progress(files, comps, target) {
     reached: values.filter((v) => v >= target).length,
     fraction: values.length ? values.reduce((s, v) => s + Math.min(v, target), 0) / (values.length * target) : 0,
   };
-}
-
-export function comparisonsCSV(comps) {
-  const header = ["id", "created_at", "session_id", "image_a", "image_b", "result", "winner", "shown_left", "left_image", "right_image", "is_repeat"];
-  const rows = comps.map((c) => [
-    c.id, c.created_at, c.session_id, c.image_a, c.image_b, c.result, winnerOf(c), c.shown_left,
-    c.shown_left === "a" ? c.image_a : c.image_b, c.shown_left === "a" ? c.image_b : c.image_a, c.is_repeat,
-  ]);
-  return toCSV(header, rows);
 }

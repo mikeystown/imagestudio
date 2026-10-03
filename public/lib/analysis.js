@@ -104,24 +104,3 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map() } = 
   ]);
   return toCSV(header, rows);
 }
-
-export function slotStatsCSV(stats) {
-  const rows = Object.entries(stats).flatMap(([slot, opts]) =>
-    opts.map((o) => [slot, o.option, o.count, o.mean?.toFixed(3), o.solidShare?.toFixed(3), o.lowSample]),
-  );
-  return toCSV(["slot", "option", "count", "mean_rating_1_7", "share_solid_or_above", "low_sample"], rows);
-}
-
-// Image record for JSONL export: rating as a 1–7 score with its label, no in-app bookkeeping fields.
-export function exportRecord(r) {
-  const out = Object.fromEntries(Object.entries(r).filter(([k]) => !k.startsWith("_")));
-  if (r.rating) {
-    const { value, ...rest } = r.rating;
-    out.rating = isRated(r) ? { score: scoreOf(r), label: RATINGS[value], ...rest } : { score: null, ...rest };
-  }
-  return out;
-}
-
-export function toJSONL(items) {
-  return items.map((x) => JSON.stringify(x)).join("\n") + (items.length ? "\n" : "");
-}

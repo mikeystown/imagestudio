@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, csvCell, toJSONL, listBatches, exportRecord } from "../public/lib/analysis.js";
+import { slotStats, modelStats, overallStats, imagesCSV, csvCell, listBatches } from "../public/lib/analysis.js";
 
 const rec = (model, value, picks, tags = []) => ({ file: `${model}-${value}.png`, model, picks, rating: value == null ? undefined : { value, tags } });
 
@@ -68,16 +68,6 @@ test("imagesCSV has one column per slot and a row per image", () => {
   assert.ok(lines[1].includes(",7,Stunning,Hair,"));
 });
 
-test("slotStatsCSV and JSONL export", () => {
-  const csv = slotStatsCSV(slotStats(records));
-  assert.ok(csv.startsWith("slot,option,count,mean_rating_1_7,share_solid_or_above,low_sample\r\n"));
-  assert.ok(csv.includes("eyes,blue,2,6.000,1.000,true"));
-  const jsonl = toJSONL(records);
-  assert.equal(jsonl.trim().split("\n").length, records.length);
-  assert.deepEqual(JSON.parse(jsonl.split("\n")[0]), records[0]);
-  assert.equal(toJSONL([]), "");
-});
-
 test("listBatches groups by batch id, newest first, with names and counts", () => {
   const recs = [
     { file: "a", model: "m1", batch_id: "2026-10-01T10-00-00-000Z", rating: { value: 3 } },
@@ -94,12 +84,6 @@ test("listBatches groups by batch id, newest first, with names and counts", () =
 test("imagesCSV only has slot columns used by the exported rows", () => {
   const header = imagesCSV([{ file: "x", picks: { face: "oval" } }]).split("\r\n")[0];
   assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,bt_score,bt_se,n_comparisons,slot_face"));
-});
-
-test("exportRecord gives the rating as a 1–7 score and drops in-app fields", () => {
-  const out = exportRecord({ file: "f", _saveSeq: 3, rating: { value: 4, tags: ["Eyes"], notes: "" } });
-  assert.deepEqual(out, { file: "f", rating: { score: 5, label: "Solid beautiful", tags: ["Eyes"], notes: "" } });
-  assert.deepEqual(exportRecord({ file: "g", rating: null }), { file: "g", rating: null });
 });
 
 test("imagesCSV writes the group name via the supplied lookup", () => {
