@@ -178,3 +178,29 @@ export function progress(files, comps, target) {
     fraction: values.length ? values.reduce((s, v) => s + Math.min(v, target), 0) / (values.length * target) : 0,
   };
 }
+
+// k distinct random items (all of them if fewer), in random order.
+export function sample(items, k, rng = Math.random) {
+  const a = [...items];
+  const n = Math.min(k, a.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(rng() * (a.length - i));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+
+// Head-to-heads between images of set A and set B: how often A won (a tie counts half).
+export function crossWinRate(comps, setA, setB) {
+  let n = 0;
+  let winsA = 0;
+  for (const c of comps) {
+    const aFirst = setA.has(c.image_a) && setB.has(c.image_b);
+    const aSecond = setB.has(c.image_a) && setA.has(c.image_b);
+    if (!aFirst && !aSecond) continue;
+    n++;
+    if (c.result === "tie") winsA += 0.5;
+    else if ((c.result === "a") === aFirst) winsA++;
+  }
+  return { n, winsA, rate: n ? winsA / n : null };
+}

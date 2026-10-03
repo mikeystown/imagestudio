@@ -359,6 +359,13 @@
       </span>
     </span>
   </div>
+  <div class="panel toolbar" style="margin-top:-8px">
+    <label class="row desc">Mix in <select id="cMixFrom" style="width:auto"></select></label>
+    <label class="row desc">How many <input type="number" id="cMixCount" min="1" max="100" step="1" style="width:64px"></label>
+    <label class="check"><input type="checkbox" id="cMixSame"> Same number from this selection</label>
+    <button type="button" id="cResample" title="Draw a new random sample">Resample</button>
+    <span class="desc" id="cMixInfo"></span>
+  </div>
   <div class="progress"><div id="cBar"></div></div>
   <p class="desc" id="cProgress" style="margin:6px 0 10px"></p>
   <div id="cCompare">

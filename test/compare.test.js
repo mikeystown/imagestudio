@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET } from "../public/lib/compare.js";
+import { fitBradleyTerry, choosePair, selfAgreement, progress, countComparisons, withinSet, pairKey, PHASE1_TARGET, sample, crossWinRate } from "../public/lib/compare.js";
 import { imagesCSV } from "../public/lib/analysis.js";
 
 let nextId = 0;
@@ -144,4 +144,29 @@ test("imagesCSV carries bt_score, bt_se and n_comparisons next to the slot colum
   assert.ok(header.join().endsWith("bt_score,bt_se,n_comparisons,slot_eyes"));
   assert.deepEqual([col(x, "bt_score"), col(x, "bt_se"), col(x, "n_comparisons")], ["0.5000", "0.2500", "7"]);
   assert.deepEqual([col(y, "bt_score"), col(y, "n_comparisons")], ["", "0"]);
+});
+
+test("sample draws k distinct items, or all when there are fewer", () => {
+  const items = times(20, (_, i) => `f${i}`);
+  const s = sample(items, 12, seeded(9));
+  assert.equal(s.length, 12);
+  assert.equal(new Set(s).size, 12);
+  assert.ok(s.every((x) => items.includes(x)));
+  assert.equal(sample(["a", "b"], 5).length, 2);
+  assert.deepEqual(items.slice(0, 3), ["f0", "f1", "f2"], "input not modified");
+});
+
+test("crossWinRate counts only A-vs-B matchups, either way round, ties half", () => {
+  const A = new Set(["n1", "n2"]);
+  const B = new Set(["o1", "o2"]);
+  const comps = [
+    cmp("n1", "o1", "a"), // A wins
+    cmp("o2", "n2", "a"), // B wins (A is image_b)
+    cmp("o1", "n2", "b"), // A wins
+    cmp("n1", "o2", "tie"), // half
+    cmp("n1", "n2", "a"), // A vs A: ignored
+    cmp("o1", "o2", "b"), // B vs B: ignored
+  ];
+  assert.deepEqual(crossWinRate(comps, A, B), { n: 4, winsA: 2.5, rate: 2.5 / 4 });
+  assert.deepEqual(crossWinRate([], A, B), { n: 0, winsA: 0, rate: null });
 });
