@@ -85,18 +85,18 @@ export function toCSV(header, rows) {
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
-// Flat per-image table with one column per slot.
-export function imagesCSV(records) {
+// Flat per-image table with one column per slot. groupName maps a group id to its display name.
+export function imagesCSV(records, { groupName = (id) => id } = {}) {
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
-    "rating_1_7", "rating_label", "tags", "notes", "kind", "batch_id", "batch_name", "parent", "template", "prompt",
+    "rating_1_7", "rating_label", "tags", "notes", "kind", "group", "batch_id", "batch_name", "parent", "template", "prompt",
     ...slots.map((s) => `slot_${s}`),
   ];
   const rows = records.map((r) => [
     r.file, r.created_at, r.model, r.seed, r.resolution, r.aspect_ratio, r.cost,
     isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "",
-    (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
+    (r.rating?.tags || []).join("; "), r.rating?.notes, r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.parent, r.template, r.prompt,
     ...slots.map((s) => r.picks?.[s]),
   ]);
   return toCSV(header, rows);

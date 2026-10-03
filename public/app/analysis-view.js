@@ -2,12 +2,14 @@
 
 import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
+import { groupList, groupName } from "./groups.js";
 import { slotStats, modelStats, overallStats, imagesCSV, slotStatsCSV, toJSONL, exportRecord, listBatches, DEFAULT_MIN_SAMPLES } from "../lib/analysis.js";
 
-// batch: "" = all images, "*" = every batch image, otherwise one batch id.
-let opts = { model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
-if (opts.batchOnly) opts.batch = "*"; // setting from before the batch picker existed
+// group: "" = all groups, else a group id. batch: "" = all runs (in the group), else one run's batch id.
+let opts = { group: "", model: "", batch: "", minSamples: DEFAULT_MIN_SAMPLES, ...store.get("analysis:opts", {}) };
+if (opts.batch === "*") opts.batch = ""; // "All batches" option from before groups existed
 delete opts.batchOnly;
+const saveOpts = () => store.set("analysis:opts", opts);
 const isActive = () => !$("tab-analysis").classList.contains("hidden");
 
 export function initAnalysis() {
@@ -15,8 +17,9 @@ export function initAnalysis() {
   render();
 }
 
-const inBatch = (r) => !opts.batch || (opts.batch === "*" ? r.kind === "batch" : r.batch_id === opts.batch);
-const records = () => state.library.filter((r) => (!opts.model || r.model === opts.model) && inBatch(r));
+const inGroup = (r) => !opts.group || r.group_id === opts.group;
+const records = () =>
+  state.library.filter((r) => inGroup(r) && (!opts.batch || r.batch_id === opts.batch) && (!opts.model || r.model === opts.model));
 
 // Batch ids are ISO timestamps with ":" and "." replaced by "-".
 const batchDate = (id) => new Date(id.replace(/T(\d\d)-(\d\d)-(\d\d)-(\d+)Z$/, "T$1:$2:$3.$4Z"));
@@ -26,12 +29,19 @@ function batchLabel(b) {
   return `${b.name ? `${b.name} · ` : ""}${when} · ${b.count} images, ${b.rated} rated · ${models}`;
 }
 
+function renderGroupOptions() {
+  if (opts.group && !groupList().some((g) => g.id === opts.group)) opts.group = "";
+  $("aGroup").innerHTML = [["", "All groups"], ...groupList().map((g) => [g.id, g.name])]
+    .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.group ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+}
+
+// Runs within the selected group.
 function renderBatchOptions() {
-  const batches = listBatches(state.library);
+  const batches = listBatches(state.library.filter(inGroup));
   const entries = batches.map((b) => [b.id, batchLabel(b)]);
-  // A batch that was just started has no images yet; keep it selectable.
-  if (opts.batch && opts.batch !== "*" && !batches.some((b) => b.id === opts.batch)) entries.unshift([opts.batch, "Selected batch (no images yet)"]);
-  $("aBatch").innerHTML = [["", "All images"], ["*", "All batches"], ...entries]
+  // A run that was just started has no images yet; keep it selectable.
+  if (opts.batch && !batches.some((b) => b.id === opts.batch)) entries.unshift([opts.batch, "Selected run (no images yet)"]);
+  $("aBatch").innerHTML = [["", opts.group ? "All runs in this group" : "All runs"], ...entries]
     .map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === opts.batch ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
 }
 
@@ -41,6 +51,7 @@ const avg = (x) => (x == null ? "—" : x.toFixed(2));
 const ratingName = (x) => (x == null ? "" : RATINGS[Math.round(x) - 1]);
 
 export function render() {
+  renderGroupOptions();
   renderBatchOptions();
   const models = [...new Set(state.library.map((r) => r.model))].sort();
   $("aModel").innerHTML = `<option value="">All models</option>` +
@@ -90,29 +101,33 @@ export function render() {
     : '<p class="desc">No rated images yet.</p>';
 }
 
-$("aModel").onchange = () => { opts.model = $("aModel").value; store.set("analysis:opts", opts); render(); };
-$("aBatch").onchange = () => { opts.batch = $("aBatch").value; store.set("analysis:opts", opts); render(); };
-on("batch-started", (id) => { opts.batch = id; opts.model = ""; store.set("analysis:opts", opts); });
-$("aMin").oninput = () => { opts.minSamples = Math.max(1, Number($("aMin").value) || 1); store.set("analysis:opts", opts); render(); };
+$("aGroup").onchange = () => { opts.group = $("aGroup").value; opts.batch = ""; saveOpts(); render(); };
+$("aModel").onchange = () => { opts.model = $("aModel").value; saveOpts(); render(); };
+$("aBatch").onchange = () => { opts.batch = $("aBatch").value; saveOpts(); render(); };
+// A new run selects its group and itself.
+on("batch-started", ({ id, group }) => { Object.assign(opts, { group, batch: id, model: "" }); saveOpts(); });
+on("groups", () => isActive() && render());
+$("aMin").oninput = () => { opts.minSamples = Math.max(1, Number($("aMin").value) || 1); saveOpts(); render(); };
 
 // Clicking an option row opens Rate filtered to that slot value.
 $("aSlots").addEventListener("click", (e) => {
   const tr = e.target.closest("tr[data-slot]");
-  if (tr) emit("rate-filter", { slot: tr.dataset.slot, slotValue: tr.dataset.value, model: opts.model });
+  if (tr) emit("rate-filter", { group: opts.group, slot: tr.dataset.slot, slotValue: tr.dataset.value, model: opts.model });
 });
 
 // ---------- export ----------
-// File name suffix: the selected batch's name or id, else the current time.
+// File name suffix: the selected run, else the selected group, else the current time.
+const slug = (s) => String(s || "").replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "");
 function stamp() {
-  if (opts.batch && opts.batch !== "*") {
+  if (opts.batch) {
     const b = listBatches(state.library).find((x) => x.id === opts.batch);
-    const name = b?.name?.replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "");
-    return `batch-${name || opts.batch.slice(0, 19)}`;
+    return `run-${slug(b?.name) || opts.batch.slice(0, 19)}`;
   }
+  if (opts.group) return `group-${slug(groupName(opts.group)) || opts.group}`;
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 }
-$("exImagesCsv").onclick = () => download(`images-${stamp()}.csv`, imagesCSV(records()), "text/csv");
-$("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records().map(exportRecord)), "application/x-ndjson");
+$("exImagesCsv").onclick = () => download(`images-${stamp()}.csv`, imagesCSV(records(), { groupName }), "text/csv");
+$("exImagesJsonl").onclick = () => download(`images-${stamp()}.jsonl`, toJSONL(records().map((r) => ({ ...exportRecord(r), group: groupName(r.group_id) }))), "application/x-ndjson");
 $("exSlotsCsv").onclick = () => download(`slot-stats-${stamp()}.csv`, slotStatsCSV(slotStats(records(), { minSamples: opts.minSamples })), "text/csv");
 $("exStatsJsonl").onclick = () => {
   const recs = records();

@@ -5,6 +5,8 @@ import { initGenerate } from "./generate.js";
 import { initBatch } from "./batch.js";
 import { initRate } from "./rate.js";
 import { initAnalysis } from "./analysis-view.js";
+import { loadGroups } from "./groups.js";
+import { defaultPoolSet } from "../lib/defaults.js";
 
 const TABS = ["generate", "batch", "rate", "analysis"];
 
@@ -29,6 +31,11 @@ async function start() {
     $("error").textContent = "Could not load models: " + e.message;
   }
   await loadLibrary().catch((e) => toast("Could not load the image library: " + e.message, true));
+  await loadGroups().catch((e) => {
+    // Keep the app usable with an unsaved in-memory group.
+    state.groups = { active: "default", groups: [{ id: "default", name: "Group 1", ...(store.get("batch:set", null) || defaultPoolSet()) }] };
+    toast("Could not load groups (changes won't be saved): " + e.message, true);
+  });
   initGenerate();
   initBatch();
   initRate();

@@ -13,6 +13,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const OUTPUT_DIR = path.join(ROOT, "outputs");
 const POOL_DIR = path.join(ROOT, "data", "pool-sets");
+const GROUPS_FILE = path.join(ROOT, "data", "groups.json");
+const DEFAULT_GROUP = "default"; // images made before groups existed belong here
 const PORT = Number(process.env.PORT) || 5173;
 const API = "https://openrouter.ai/api/v1";
 const MAX_BODY = 60 * 1024 * 1024; // reference images arrive as base64 data URLs
@@ -155,6 +157,7 @@ function toRecord(file, meta, mtime) {
     kind: meta.app?.kind ?? null,
     batch_id: meta.app?.batch_id ?? null,
     batch_name: meta.app?.batch_name ?? null,
+    group_id: meta.app?.group_id ?? DEFAULT_GROUP,
     parent: meta.app?.parent ?? null,
     references: meta.app?.ref_files ?? null,
     rating: meta.rating ?? null,
@@ -268,6 +271,38 @@ async function rate(req, res, name) {
   sendJson(res, 200, { rating });
 }
 
+// ---------- groups: data/groups.json ----------
+// { active, groups: [{ id, name, created_at, template, pools, locks }] }. A group bundles a template with
+// its pools and every image generated while it was active. template null = not set up yet (client fills it).
+async function groups(req, res) {
+  if (req.method === "GET") {
+    const text = await fs.readFile(GROUPS_FILE, "utf8").catch(() => null);
+    const doc = text ? JSON.parse(text) : {
+      active: DEFAULT_GROUP,
+      groups: [{ id: DEFAULT_GROUP, name: "Group 1", created_at: new Date().toISOString(), template: null, pools: {}, locks: {} }],
+    };
+    return sendJson(res, 200, doc);
+  }
+  if (req.method !== "PUT") throw httpError(405, "Method not allowed");
+  const { active, groups: list } = await readJson(req);
+  if (!Array.isArray(list) || !list.length) throw httpError(400, "groups must be a non-empty array");
+  const ids = new Set();
+  for (const g of list) {
+    if (typeof g?.id !== "string" || !/^[\w-]{1,64}$/.test(g.id) || ids.has(g.id)) throw httpError(400, "Each group needs a unique id");
+    if (typeof g.name !== "string" || !g.name.trim() || g.name.length > 80) throw httpError(400, "Group names must be 1–80 characters");
+    if (g.template !== null && typeof g.template !== "string") throw httpError(400, "template must be a string");
+    if (typeof g.pools !== "object" || !g.pools) throw httpError(400, "pools must be an object");
+    ids.add(g.id);
+  }
+  if (!ids.has(active)) throw httpError(400, "active must be one of the groups");
+  await fs.mkdir(path.dirname(GROUPS_FILE), { recursive: true });
+  await writeJsonAtomic(GROUPS_FILE, {
+    active,
+    groups: list.map(({ id, name, created_at, template, pools, locks }) => ({ id, name: name.trim(), created_at, template, pools, locks: locks || {} })),
+  });
+  sendJson(res, 200, { ok: true });
+}
+
 // ---------- pool sets: data/pool-sets/<name>.json ----------
 function poolSetPath(name) {
   if (!/^[\w\- ]{1,60}$/.test(name)) throw httpError(400, "Pool set names may use letters, digits, spaces, - and _ (max 60)");
@@ -332,6 +367,7 @@ http
       if (req.method === "POST" && pathname === "/api/images") return await generate(req, res);
       if (req.method === "GET" && pathname === "/api/library") return await library(res);
       if (req.method === "POST" && pathname.startsWith("/api/rating/")) return await rate(req, res, tail("/api/rating/"));
+      if (pathname === "/api/groups") return await groups(req, res);
       if (pathname === "/api/pool-sets" || pathname.startsWith("/api/pool-sets/")) return await poolSets(req, res, tail("/api/pool-sets/") || "");
       if (req.method === "GET") return await serveStatic(req, res);
       sendJson(res, 405, { error: { message: "Method not allowed" } });

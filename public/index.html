@@ -222,6 +222,13 @@
 <section id="tab-batch" class="tab hidden">
 <div class="batch">
   <div class="col">
+    <section class="panel row wrap">
+      <h2 style="margin:0">Group</h2>
+      <select id="groupSelect" style="width:auto;min-width:160px" title="Switch group: each has its own template, pools and images"></select>
+      <input type="text" id="groupName" maxlength="80" style="width:220px" title="Rename this group">
+      <button type="button" id="newGroup" title="Start a new group from a copy of this template and pools">New group</button>
+      <span class="desc" id="groupInfo"></span>
+    </section>
     <section class="panel">
       <div class="row between wrap" style="margin-bottom:8px">
         <h2 style="margin:0">Template</h2>
@@ -276,7 +283,7 @@
       </div>
       <p class="desc" id="batchSeedNote" style="margin-top:5px"></p>
     </div>
-    <label class="field">Batch name (optional)<input type="text" id="batchName" maxlength="80" placeholder="e.g. face-shape test"></label>
+    <label class="field">Run name (optional)<input type="text" id="batchName" maxlength="80" placeholder="e.g. face-shape test"></label>
     <p class="desc" id="estimate"></p>
     <div class="row">
       <button class="primary" id="runBatch" style="flex:1">Run batch</button>
@@ -294,6 +301,7 @@
 <!-- ================= Rate ================= -->
 <section id="tab-rate" class="tab hidden">
   <div class="panel toolbar">
+    <select id="fGroup" title="Group"></select>
     <select id="fRating"></select>
     <select id="fModel"></select>
     <select id="fTag"></select>
@@ -327,7 +335,8 @@
 <section id="tab-analysis" class="tab hidden">
   <div class="panel toolbar">
     <select id="aModel"></select>
-    <select id="aBatch" title="Which images the stats and exports cover"></select>
+    <select id="aGroup" title="Group the stats and exports cover"></select>
+    <select id="aBatch" title="Run within the group"></select>
     <label class="row desc">Flag below <input type="number" id="aMin" min="1" step="1" style="width:70px"> rated samples</label>
     <span class="row" style="margin-left:auto">
       <span class="desc">Export:</span>

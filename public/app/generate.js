@@ -2,6 +2,7 @@
 
 import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, addRecords, MAX_SEED, DEFAULT_MODEL } from "./util.js";
 import { openLightbox } from "./lightbox.js";
+import { activeGroup } from "./groups.js";
 
 let seedMode = "random";
 let refs = []; // data URLs
@@ -117,7 +118,7 @@ async function generate() {
 
   const params = collectParams();
   store.set("params:" + m.id, params);
-  const payload = { model: m.id, prompt, ...params, app: { kind: "single" } };
+  const payload = { model: m.id, prompt, ...params, app: { kind: "single", group_id: activeGroup()?.id } };
 
   if (caps.seed) {
     if (seedMode === "fixed") {

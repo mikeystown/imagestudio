@@ -4,9 +4,10 @@ import { $, store, state, api, getCaps, escapeHtml, imgSrc, fmtCost, addRecords,
 import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
 import { postImage } from "./batch.js";
 import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
+import { activeGroup, groupList, groupName } from "./groups.js";
 
 const KINDS = ["batch", "single", "reproduce", "reference", "blend"];
-let filters = { rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", ...store.get("rate:filters", {}) };
+let filters = { group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "", sort: "newest", ...store.get("rate:filters", {}) };
 let autoAdvance = store.get("rate:autoAdvance", true);
 let list = []; // filtered + sorted snapshot; ratings change in place without re-filtering
 let current = null; // file name
@@ -31,6 +32,9 @@ function renderFilterOptions() {
   const models = [...new Set(lib.map((r) => r.model))].sort();
   const slots = [...new Set(lib.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const slotValues = filters.slot ? [...new Set(lib.map((r) => r.picks?.[filters.slot]).filter(Boolean))].sort() : [];
+  if (filters.group && !groupList().some((g) => g.id === filters.group)) filters.group = "";
+  $("fGroup").innerHTML = `<option value="">All groups</option>` +
+    groupList().map((g) => `<option value="${escapeHtml(g.id)}" ${filters.group === g.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("");
   $("fRating").innerHTML =
     [["all", "All ratings"], ["unrated", "Unrated"], ["rated", "Rated"], ["solid", `≥ ${RATINGS[SOLID]}`]]
       .concat(RATINGS.map((r, i) => [String(i), `${i + 1} · ${r}`]))
@@ -48,6 +52,7 @@ function renderFilterOptions() {
 function matches(r) {
   const f = filters;
   const v = r.rating?.value;
+  if (f.group && r.group_id !== f.group) return false;
   if (f.rating === "unrated" && isRated(r)) return false;
   if (f.rating === "rated" && !isRated(r)) return false;
   if (f.rating === "solid" && !(isRated(r) && v >= SOLID)) return false;
@@ -76,7 +81,7 @@ function refilter() {
   renderDetail();
 }
 
-for (const [id, key] of [["fRating", "rating"], ["fModel", "model"], ["fTag", "tag"], ["fSlot", "slot"], ["fSlotValue", "slotValue"], ["fKind", "kind"], ["fSort", "sort"]]) {
+for (const [id, key] of [["fGroup", "group"], ["fRating", "rating"], ["fModel", "model"], ["fTag", "tag"], ["fSlot", "slot"], ["fSlotValue", "slotValue"], ["fKind", "kind"], ["fSort", "sort"]]) {
   $(id).onchange = () => {
     filters[key] = $(id).value;
     if (key === "slot") filters.slotValue = "";
@@ -106,10 +111,13 @@ on("rate-filter", (f) => {
   emit("tab", "rate");
 });
 
+// Group names or the group list changed.
+on("groups", () => renderFilterOptions());
+
 on("show-image", (file) => {
   emit("tab", "rate");
   if (!list.some((r) => r.file === file)) {
-    filters = { ...filters, rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "" };
+    filters = { ...filters, group: "", rating: "all", model: "", tag: "", slot: "", slotValue: "", kind: "" };
     renderFilterOptions();
     refilter();
   }
@@ -238,6 +246,7 @@ function renderDetail() {
       ${r.aspect_ratio ? `<span>aspect: <b>${escapeHtml(r.aspect_ratio)}</b></span>` : ""}
       <span>cost: <b>${fmtCost(r.cost)}</b></span>
       <span>kind: <b>${escapeHtml(r.kind || "single")}</b></span>
+      <span>group: <b>${escapeHtml(groupName(r.group_id))}</b></span>
       <span>${escapeHtml(new Date(r.created_at).toLocaleString())}</span>
       ${r.parent ? `<span style="flex-basis:100%">from: ${[].concat(r.parent).map((p) => `<a href="#" data-goto="${escapeHtml(p)}">${escapeHtml(p)}</a>`).join(", ")}</span>` : ""}
     </div>
@@ -381,7 +390,7 @@ $("dlgGo").onclick = async () => {
   const prompt = $("dlgPrompt").value.trim();
   if (!prompt) return ($("dlgError").textContent = "Enter a prompt.");
   const sp = (await getCaps(model).catch(() => ({}))).supported_parameters || {};
-  const payload = { model, prompt, app: { kind, parent: kind === "blend" ? recs.map((r) => r.file) : recs[0].file } };
+  const payload = { model, prompt, app: { kind, parent: kind === "blend" ? recs.map((r) => r.file) : recs[0].file, group_id: activeGroup()?.id } };
   if (kind !== "reproduce") payload.ref_files = recs.map((r) => r.file);
   if ($("dlgRes").value) payload.resolution = $("dlgRes").value;
   if ($("dlgAR").value) payload.aspect_ratio = $("dlgAR").value;

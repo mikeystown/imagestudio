@@ -4,8 +4,11 @@ import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost,
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
 import { commonEnumValues, estimateImageCost } from "../lib/params.js";
 import { defaultPoolSet } from "../lib/defaults.js";
+import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups } from "./groups.js";
 
-let set = store.get("batch:set", null) || defaultPoolSet(); // { template, pools: {slot: [{value, weight}]}, locks: {slot: value} }
+// The active group (groups.js): { id, name, template, pools: {slot: [{value, weight}]}, locks: {slot: value} }.
+// Edits go straight into it and are saved to the server.
+let set = null;
 let cfg = {
   models: [DEFAULT_MODEL], perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3,
   ...store.get("batch:cfg", {}),
@@ -13,11 +16,13 @@ let cfg = {
 let run = null;
 let selectedCaps = []; // capabilities of cfg.models, same order
 
-const saveSet = () => store.set("batch:set", set);
+const saveSet = () => saveGroups();
 const saveCfg = () => store.set("batch:cfg", cfg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function initBatch() {
+  set = activeGroup();
+  renderGroupBar();
   cfg.models = cfg.models.filter((id) => state.models.some((m) => m.id === id));
   $("template").value = set.template;
   $("perModel").value = cfg.perModel;
@@ -30,6 +35,41 @@ export function initBatch() {
   refreshPoolSetList();
   setSeedMode(cfg.seedMode);
 }
+
+// ---------- groups ----------
+// force: also overwrite the name box while it has focus (after switching groups).
+function renderGroupBar(force = false) {
+  $("groupSelect").innerHTML = groupList()
+    .map((g) => `<option value="${escapeHtml(g.id)}" ${g.id === set.id ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("");
+  if (force || document.activeElement !== $("groupName")) $("groupName").value = set.name;
+  const imgs = state.library.filter((r) => r.group_id === set.id);
+  const runs = new Set(imgs.map((r) => r.batch_id).filter(Boolean)).size;
+  $("groupInfo").textContent = `${imgs.length} image(s) · ${runs} run(s)`;
+}
+
+$("groupSelect").onchange = () => switchGroup($("groupSelect").value);
+$("newGroup").onclick = () => {
+  const g = createGroup();
+  toast(`Created “${g.name}”, starting from a copy of the previous template and pools. Rename it in the box next to the picker.`);
+  $("groupName").focus();
+  $("groupName").select();
+};
+const commitRename = () => {
+  if (!$("groupName").value.trim()) $("groupName").value = set.name;
+  else if (renameGroup(set.id, $("groupName").value)) toast("Group renamed.");
+};
+$("groupName").addEventListener("change", commitRename);
+$("groupName").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+
+// Switching or creating a group swaps the template and pools being edited.
+on("groups", () => {
+  set = activeGroup();
+  $("template").value = set.template;
+  renderPools();
+  renderTemplateInfo();
+  renderGroupBar(true);
+});
+on("library", () => set && renderGroupBar());
 
 // ---------- template ----------
 $("template").addEventListener("input", () => {
@@ -186,7 +226,7 @@ $("poolLoad").onclick = async () => {
   if (!name) return;
   try {
     const s = await api(`/api/pool-sets/${encodeURIComponent(name)}`);
-    set = { template: s.template, pools: s.pools, locks: s.locks || {} };
+    Object.assign(set, { template: s.template, pools: s.pools, locks: s.locks || {} });
     saveSet();
     $("template").value = set.template;
     $("poolSetName").value = name;
@@ -224,7 +264,7 @@ $("poolDelete").onclick = async () => {
   refreshPoolSetList("");
 };
 $("poolReset").onclick = () => {
-  set = defaultPoolSet();
+  Object.assign(set, defaultPoolSet());
   saveSet();
   $("template").value = set.template;
   renderPools();
@@ -326,7 +366,7 @@ function buildJobs(batchId, batchName) {
       const payload = {
         model,
         prompt,
-        app: { kind: "batch", template: set.template, picks, batch_id: batchId, batch_name: batchName || undefined },
+        app: { kind: "batch", template: set.template, picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id },
       };
       if (sp.resolution && cfg.resolution) payload.resolution = cfg.resolution;
       if (sp.aspect_ratio && cfg.aspect_ratio) payload.aspect_ratio = cfg.aspect_ratio;
@@ -365,7 +405,7 @@ async function runBatch() {
 
   const batchId = new Date().toISOString().replace(/[:.]/g, "-");
   const queue = buildJobs(batchId, $("batchName").value.trim());
-  emit("batch-started", batchId); // Analysis switches to this batch
+  emit("batch-started", { id: batchId, group: set.id }); // Analysis switches to this run
   run = { stopped: false, total: queue.length, done: 0, failed: 0, cost: 0, started: Date.now() };
   $("runBatch").disabled = true;
   $("stopBatch").disabled = false;

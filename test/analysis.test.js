@@ -93,11 +93,17 @@ test("listBatches groups by batch id, newest first, with names and counts", () =
 
 test("imagesCSV only has slot columns used by the exported rows", () => {
   const header = imagesCSV([{ file: "x", picks: { face: "oval" } }]).split("\r\n")[0];
-  assert.ok(header.endsWith("batch_id,batch_name,parent,template,prompt,slot_face"));
+  assert.ok(header.endsWith("group,batch_id,batch_name,parent,template,prompt,slot_face"));
 });
 
 test("exportRecord gives the rating as a 1–7 score and drops in-app fields", () => {
   const out = exportRecord({ file: "f", _saveSeq: 3, rating: { value: 4, tags: ["Eyes"], notes: "" } });
   assert.deepEqual(out, { file: "f", rating: { score: 5, label: "Solid beautiful", tags: ["Eyes"], notes: "" } });
   assert.deepEqual(exportRecord({ file: "g", rating: null }), { file: "g", rating: null });
+});
+
+test("imagesCSV writes the group name via the supplied lookup", () => {
+  const csv = imagesCSV([{ file: "x", group_id: "g1" }], { groupName: (id) => (id === "g1" ? "Face shapes" : id) });
+  const [header, row] = csv.trim().split("\r\n").map((l) => l.split(","));
+  assert.equal(row[header.indexOf("group")], "Face shapes");
 });
