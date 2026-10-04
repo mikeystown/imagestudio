@@ -15,7 +15,7 @@ export const activeGroup = () => groupList().find((g) => g.id === state.groups.a
 export const groupName = (id) => groupList().find((g) => g.id === id)?.name || id;
 
 // Run settings saved with each version (concurrency stays a global preference).
-export const SETTING_KEYS = ["models", "perModel", "resolution", "aspect_ratio", "seedMode", "seed"];
+export const SETTING_KEYS = ["models", "providers", "perModel", "resolution", "aspect_ratio", "seedMode", "seed"];
 export const pickSettings = (cfg) => structuredClone(Object.fromEntries(SETTING_KEYS.filter((k) => k in cfg).map((k) => [k, cfg[k]])));
 
 // The part of a group that a version holds.

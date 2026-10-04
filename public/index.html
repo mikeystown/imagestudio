@@ -98,6 +98,11 @@
   label.check span:first-of-type { flex: 1; }
   .progress { height: 8px; background: var(--input); border: 1px solid var(--border); border-radius: 99px; overflow: hidden; }
   .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  #planBox summary { cursor: pointer; }
+  #planPreview table { border-collapse: collapse; font-size: 12px; margin-top: 6px; width: 100%; }
+  #planPreview th, #planPreview td { text-align: left; padding: 2px 6px; border-bottom: 1px solid var(--border); }
+  #planPreview td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  #planPreview td.zero { color: var(--muted); }
   #batchErrors { color: var(--danger); font-size: 12px; max-height: 120px; overflow: auto; }
   .thumbs { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
 
@@ -206,6 +211,9 @@
     <label class="field">Model
       <select id="model"><option>Loading models…</option></select>
     </label>
+    <label class="field hidden" id="providerField">Provider
+      <select id="provider"></select>
+    </label>
     <p class="desc" id="modelDesc"></p>
 
     <label class="field">Prompt
@@ -282,11 +290,10 @@
           <button type="button" id="verRename" title="Rename this version">Rename</button>
           <span class="desc" id="verCount"></span>
           <input type="text" id="verName" placeholder="new version name (optional)" maxlength="40" style="width:190px">
-          <select id="verKind" style="width:auto" title="Type of the new version">
-            <option value="text">Text only</option>
-            <option value="reference">With reference images</option>
-          </select>
-          <button type="button" id="verAdd" title="Start a new, blank version of the chosen type">+ Add new version</button>
+          <button type="button" id="verDupText" title="New text-only version copying this one's template, pools, locks and run settings">Duplicate, text only</button>
+          <button type="button" id="verDupRef" title="New version with reference images, copying this one's template, pools, locks, run settings and reference images">Duplicate, with ref images</button>
+          <button type="button" id="verNewText" title="New blank text-only version">Empty, text only</button>
+          <button type="button" id="verNewRef" title="New blank version with reference images">Empty, with ref images</button>
           <button type="button" id="verDelete">Delete</button>
           <button type="button" id="poolReset" title="Fill this version with the default template and pools">Defaults</button>
         </div>
@@ -327,6 +334,7 @@
       <div class="row between"><label class="field">Models</label><span class="desc" id="selectedCount"></span></div>
       <input type="text" id="modelFilter" placeholder="Filter models…" style="margin:5px 0">
       <div class="modellist" id="batchModels"></div>
+      <div class="grid2" id="batchProviders" style="margin-top:6px"></div>
       <div class="desc" id="modelWarnings" style="margin-top:6px"></div>
     </div>
     <div class="grid2">
@@ -348,9 +356,15 @@
     </div>
     <label class="field">Run name (optional)<input type="text" id="batchName" maxlength="80" placeholder="e.g. face-shape test"></label>
     <p class="desc" id="estimate"></p>
+    <details id="planBox">
+      <summary class="desc" id="planSummary"></summary>
+      <div id="planPreview"></div>
+      <label class="field" style="margin-top:6px">Order seed (optional)<input id="planSeed" type="number" min="0" max="2147483647" step="1" placeholder="random: reproduce a run's order with its seed"></label>
+    </details>
     <div class="row">
       <button class="primary" id="runBatch" style="flex:1">Run batch</button>
       <button type="button" id="stopBatch" disabled>Stop</button>
+      <button type="button" id="rerunBatch" class="hidden" title="Generate the planned images of the last run that are still missing, with their planned slot values">Re-run missing</button>
     </div>
     <div class="error" id="batchError"></div>
     <div class="progress"><div id="progressBar"></div></div>
@@ -454,8 +468,9 @@
       <select id="exportKind" style="width:auto" title="What the CSV contains">
         <option value="images">Images: one row per image</option>
         <option value="comparisons">Comparisons: one row per pick</option>
+        <option value="plan">Slot plan of the selected run (JSON)</option>
       </select>
-      <button type="button" id="exportCsv">Export CSV</button>
+      <button type="button" id="exportCsv">Export</button>
     </span>
   </div>
   <div class="tiles" id="aSummary"></div>
@@ -469,6 +484,7 @@
     <h2 id="dlgTitle"></h2>
     <div class="refs" id="dlgRefs"></div>
     <label class="field">Model<select id="dlgModel"></select></label>
+    <label class="field hidden" id="dlgProviderField">Provider<select id="dlgProvider"></select></label>
     <p class="desc warn" id="dlgModelNote"></p>
     <label class="field">Prompt<textarea id="dlgPrompt"></textarea></label>
     <div class="grid2">

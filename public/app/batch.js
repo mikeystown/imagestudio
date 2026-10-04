@@ -1,8 +1,9 @@
 // Batch tab: prompt template with random slots, slot-pools editor, multi-model batch runs.
 
-import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, MAX_SEED, DEFAULT_MODEL } from "./util.js";
+import { $, store, state, api, getCaps, providerOptionsHtml, randomSeed, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, MAX_SEED, DEFAULT_MODEL } from "./util.js";
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
-import { commonEnumValues, estimateImageCost } from "../lib/params.js";
+import { planBatch, countPlan, describePlan, runQueue } from "../lib/design.js";
+import { commonEnumValues, estimateImageCost, providerCaps } from "../lib/params.js";
 import { defaultPoolSet, DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS } from "../lib/defaults.js";
 import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups, versionFields, pickSettings } from "./groups.js";
 import { openLightbox } from "./lightbox.js";
@@ -16,10 +17,14 @@ let set = null;
 const isRef = () => set?.kind === "reference";
 const tpl = () => set.template ?? "";
 const setTpl = (text) => (set.template = text);
-const CFG_DEFAULTS = { models: [DEFAULT_MODEL], perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3 };
+const CFG_DEFAULTS = { models: [DEFAULT_MODEL], providers: {}, perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3 };
 let cfg = { ...CFG_DEFAULTS, ...store.get("batch:cfg", {}) };
 let run = null;
+let last = null; // the last run: { batchId, plan, jobs }, kept so its missing images can be generated later
+const MAX_TRIES = 3; // tries per planned image before it counts as failed
 let selectedCaps = []; // capabilities of cfg.models, same order
+// Parameters and pricing of the i-th selected model with its chosen provider ("" = Auto).
+const capsAt = (i) => providerCaps(selectedCaps[i], cfg.providers?.[cfg.models[i]]);
 
 // Every edit saves straight into the current version, then the group (debounced).
 const saveSet = () => {
@@ -195,6 +200,42 @@ function renderTemplateInfo() {
   notes.push(`${slots.length} slot(s): ${slots.map((s) => `{${escapeHtml(s)}}`).join(" ") || "none"}`);
   $("templateNote").innerHTML = notes.join("<br>");
   $("preview").textContent = prompt;
+  renderPlanPreview();
+}
+
+// ---------- slot plan preview ----------
+// Each model gets the same counts (the seed only changes the order), so one model's plan is shown.
+function renderPlanPreview() {
+  const plan = planBatch({ template: tpl(), pools: set.pools, locks: set.locks, models: ["preview"], perModel: cfg.perModel, seed: 0 });
+  const perModels = cfg.models.length > 1 ? ` Counts are per model (${cfg.models.length} models).` : "";
+  $("planSummary").textContent = `Slot plan: ${describePlan(plan)}${perModels}`;
+  if (plan.combinations === 1) return ($("planPreview").innerHTML = "");
+  const { slots, cells } = countPlan(plan);
+  const cell = (n) => `<td class="n ${n ? "" : "zero"}">${n}</td>`;
+  const slotTables = Object.entries(slots).map(([slot, counts]) =>
+    `<table><tr><th>{${escapeHtml(slot)}}</th><th></th></tr>${Object.entries(counts).map(([v, n]) => `<tr><td>${escapeHtml(v)}</td>${cell(n)}</tr>`).join("")}</table>`).join("");
+  const MAX_ROWS = 120;
+  const combos = plan.combinations <= MAX_ROWS
+    ? `<table><tr>${plan.slots.map((s) => `<th>{${escapeHtml(s.name)}}</th>`).join("")}<th></th></tr>${
+      cells.map((n, i) => {
+        const picks = plan.rows.find((r) => r.cell === i)?.picks;
+        // Combinations left out of this run have no row; work their values out from the cell number.
+        const values = picks ? plan.slots.map((s) => picks[s.name]) : cellValues(plan.slots, i);
+        return `<tr>${values.map((v) => `<td>${escapeHtml(v)}</td>`).join("")}${cell(n)}</tr>`;
+      }).join("")}</table>`
+    : `<p class="desc">${plan.combinations} combinations: too many to list.</p>`;
+  $("planPreview").innerHTML = `${slotTables}<p class="desc" style="margin-top:6px">Per combination</p>${combos}`;
+}
+
+// Slot values of combination number i (first slot outermost, as in combinations()).
+function cellValues(slots, i) {
+  const out = [];
+  for (let k = slots.length - 1; k >= 0; k--) {
+    const n = slots[k].options.length;
+    out[k] = slots[k].options[i % n];
+    i = Math.floor(i / n);
+  }
+  return out;
 }
 
 // ---------- slot pools ----------
@@ -225,7 +266,7 @@ function renderPools() {
           ${(set.pools[slot] || []).map((o, i) => `
             <div class="opt">
               <input type="text" data-opt="${i}" value="${escapeHtml(o.value)}" placeholder="option text">
-              <input type="number" data-weight="${i}" value="${o.weight ?? 1}" min="0" step="0.5" title="Weight (0 = never pick)">
+              <input type="number" data-weight="${i}" value="${o.weight ?? 1}" min="0" step="0.5" title="0 leaves this option out of batches. Batches use every other option equally; the weight only affects the random example prompt.">
               <button type="button" data-del="${i}" title="Remove option">×</button>
             </div>`).join("")}
         </div>
@@ -319,7 +360,7 @@ $("unlockAll").onclick = () => {
 
 // ---------- versions ----------
 // Each group has its own versions (template, reference template, pools, locks) and is always on one of them;
-// every edit is saved into that version (see saveSet). "Add new version" starts a blank one.
+// every edit is saved into that version (see saveSet). new versions start blank or as a copy of the current one.
 const currentVersion = () => set.versions?.find((v) => v.id === set.current);
 
 // Copy the live template/pools/locks into the current version.
@@ -364,15 +405,24 @@ function nextVersionName() {
   return label ? `v${n} ${label}` : `v${n}`;
 }
 
-// A new version of the given type (blank unless defaults), keeping the current run settings; switches to it.
-function addVersion(kind, { defaults = false } = {}) {
+// A new version of the given type, keeping the current run settings; switches to it. It starts blank (or with
+// that type's defaults), or with duplicate set copies the current version's template, pools, locks and settings,
+// plus its reference images when the new version is a reference one.
+function addVersion(kind, { defaults = false, duplicate = false } = {}) {
   syncVersion();
+  let content;
+  if (duplicate) {
+    content = versionFields(currentVersion() || set);
+    content.kind = kind;
+    if (kind !== "reference") content.refs = [];
+  } else {
+    content = { ...freshContent(kind, { defaults }), settings: pickSettings(cfg) };
+  }
   const v = {
     id: `v-${Date.now().toString(36)}`,
     name: nextVersionName(),
     created_at: new Date().toISOString(),
-    ...freshContent(kind, { defaults }),
-    settings: pickSettings(cfg),
+    ...content,
   };
   set.versions.push(v);
   set.current = v.id;
@@ -385,12 +435,22 @@ function addVersion(kind, { defaults = false } = {}) {
   return v;
 }
 
-$("verAdd").onclick = () => {
-  const v = addVersion($("verKind").value);
+const kindText = (kind) => (kind === "reference" ? "with reference images" : "text only");
+function newVersion(kind) {
+  const v = addVersion(kind);
   $("template").focus();
-  toast(`Started “${v.name}” (${v.kind === "reference" ? "with reference images" : "text only"}, blank). “Defaults” fills in the default template.`);
-};
-$("verName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verAdd").click(); });
+  toast(`Started “${v.name}” (${kindText(kind)}, blank). “Defaults” fills in the default template.`);
+}
+function duplicateVersion(kind) {
+  const from = currentVersion()?.name;
+  const v = addVersion(kind, { duplicate: true });
+  $("template").focus();
+  toast(`Started “${v.name}” (${kindText(kind)}), a copy of “${from}”.`);
+}
+$("verDupText").onclick = () => duplicateVersion("text");
+$("verDupRef").onclick = () => duplicateVersion("reference");
+$("verNewText").onclick = () => newVersion("text");
+$("verNewRef").onclick = () => newVersion("reference");
 
 // Rename: the dropdown becomes a text box; Enter or clicking away saves, Esc cancels.
 function showRename(on) {
@@ -491,7 +551,8 @@ async function refreshSelection() {
     $("modelWarnings").innerHTML = `<span class="warn">Could not load capabilities: ${escapeHtml(e.message)}</span>`;
     return;
   }
-  const sps = selectedCaps.map((c) => c.supported_parameters || {});
+  renderProviders();
+  const sps = cfg.models.map((_, i) => capsAt(i).supported_parameters);
   const res = commonEnumValues(sps, "resolution");
   const ars = commonEnumValues(sps, "aspect_ratio");
   if (cfg.resolution && !res.includes(cfg.resolution)) cfg.resolution = "";
@@ -501,9 +562,22 @@ async function refreshSelection() {
   renderWarnings();
 }
 
+// A provider choice for each selected model served by several providers.
+function renderProviders() {
+  $("batchProviders").innerHTML = cfg.models.map((id, i) => selectedCaps[i]?.endpoints?.length > 1
+    ? `<label class="field">${escapeHtml(modelName(id))} provider<select data-model="${escapeHtml(id)}">${providerOptionsHtml(selectedCaps[i], cfg.providers?.[id])}</select></label>`
+    : "").join("");
+}
+$("batchProviders").addEventListener("change", (e) => {
+  const id = e.target.dataset.model;
+  cfg.providers = { ...cfg.providers, [id]: e.target.value || undefined };
+  saveCfg();
+  refreshSelection(); // resolution and aspect choices depend on the provider
+});
+
 // Reference mode: selected models that can't take this many reference images.
 const refsTooMany = () =>
-  isRef() ? cfg.models.filter((_, i) => (selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0) < (set.refs?.length ?? 0)) : [];
+  isRef() ? cfg.models.filter((_, i) => (capsAt(i).supported_parameters.input_references?.max ?? 0) < (set.refs?.length ?? 0)) : [];
 
 function renderWarnings() {
   const warn = [];
@@ -514,14 +588,14 @@ function renderWarnings() {
     if (lacking.length)
       warn.push(`⚠ Can't take ${n} reference image(s), so the batch won't run: ${lacking.map((id) => {
         const i = cfg.models.indexOf(id);
-        return `${escapeHtml(modelName(id))} (max ${selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0})`;
+        return `${escapeHtml(modelName(id))} (max ${capsAt(i).supported_parameters.input_references?.max ?? 0})`;
       }).join(", ")}`);
   }
-  const noSeed = cfg.models.filter((_, i) => !selectedCaps[i]?.supported_parameters?.seed);
+  const noSeed = cfg.models.filter((_, i) => !capsAt(i).supported_parameters.seed);
   if (noSeed.length) warn.push(`⚠ No seed support (results can't be reproduced exactly): ${noSeed.map(modelName).map(escapeHtml).join(", ")}`);
   for (const key of ["resolution", "aspect_ratio"]) {
     if (!cfg[key]) continue;
-    const lacking = cfg.models.filter((_, i) => !selectedCaps[i]?.supported_parameters?.[key]);
+    const lacking = cfg.models.filter((_, i) => !capsAt(i).supported_parameters[key]);
     if (lacking.length) warn.push(`${key.replace("_", " ")} isn't supported by ${lacking.map(modelName).map(escapeHtml).join(", ")}, so those use their default.`);
   }
   $("modelWarnings").innerHTML = warn.map((w) => `<div class="${w.startsWith("⚠") ? "warn" : ""}">${w}</div>`).join("");
@@ -530,17 +604,18 @@ function renderWarnings() {
   let unknown = 0;
   const refCount = isRef() ? set.refs?.length ?? 0 : 0;
   cfg.models.forEach((_, i) => {
-    const c = estimateImageCost(selectedCaps[i]?.pricing, cfg.resolution);
+    const c = estimateImageCost(capsAt(i).pricing, cfg.resolution);
     if (c == null) unknown++;
     else est += c * cfg.perModel;
     // Reference images are billed as input images where the provider lists a price for them.
-    const input = (selectedCaps[i]?.pricing || []).find((p) => p.billable === "input_image" && p.unit === "image");
+    const input = capsAt(i).pricing.find((p) => p.billable === "input_image" && p.unit === "image");
     if (input && refCount) est += input.cost_usd * refCount * cfg.perModel;
   });
   const total = cfg.models.length * cfg.perModel;
   $("estimate").textContent = total
     ? `${total} image(s) · est. ≈${fmtCost(est)}${unknown ? ` + ${unknown} model(s) without pricing info` : ""}`
     : "";
+  if (set) renderPlanPreview();
 }
 
 $("batchRes").onchange = () => { cfg.resolution = $("batchRes").value; saveCfg(); renderWarnings(); };
@@ -562,29 +637,29 @@ function setSeedMode(mode) {
 document.querySelectorAll("#batchSeedBox .seg button").forEach((b) => (b.onclick = () => setSeedMode(b.dataset.mode)));
 
 // ---------- run ----------
-function buildJobs(batchId, batchName) {
+// One request per planned image; the plan decides each image's slot values (see lib/design.js).
+function buildJobs(plan, batchId, batchName) {
   const fixed = Number(cfg.seed);
-  const jobs = [];
-  cfg.models.forEach((model, mi) => {
-    const sp = selectedCaps[mi]?.supported_parameters || {};
-    for (let i = 0; i < cfg.perModel; i++) {
-      const { prompt, picks } = buildPrompt(tpl(), set.pools, set.locks);
-      const payload = {
-        model,
-        prompt,
-        app: { kind: "batch", template: tpl(), picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id },
-      };
-      if (isRef()) {
-        payload.ref_files = [...set.refs]; // the server sends these as input_references and records them
-        payload.app.mode = "reference";
-      }
-      if (sp.resolution && cfg.resolution) payload.resolution = cfg.resolution;
-      if (sp.aspect_ratio && cfg.aspect_ratio) payload.aspect_ratio = cfg.aspect_ratio;
-      if (sp.seed) payload.seed = cfg.seedMode === "fixed" ? fixed : randomSeed();
-      jobs.push(payload);
+  return plan.rows.map((row) => {
+    const sp = capsAt(cfg.models.indexOf(row.model)).supported_parameters;
+    const payload = {
+      model: row.model,
+      provider: cfg.providers?.[row.model] || undefined,
+      prompt: row.prompt,
+      app: {
+        kind: "batch", template: tpl(), picks: row.picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id,
+        plan: { seed: plan.seed, index: row.index, cell: row.cell },
+      },
+    };
+    if (isRef()) {
+      payload.ref_files = [...set.refs]; // the server sends these as input_references and records them
+      payload.app.mode = "reference";
     }
+    if (sp.resolution && cfg.resolution) payload.resolution = cfg.resolution;
+    if (sp.aspect_ratio && cfg.aspect_ratio) payload.aspect_ratio = cfg.aspect_ratio;
+    if (sp.seed) payload.seed = cfg.seedMode === "fixed" ? fixed : randomSeed();
+    return payload;
   });
-  return jobs;
 }
 
 // One retry for network errors, rate limits and server errors; other 4xx fail straight away.
@@ -612,47 +687,96 @@ async function runBatch() {
     const s = Number(cfg.seed);
     if (!Number.isInteger(s) || s < 0 || s > MAX_SEED) problems.push(`Seed must be an integer 0–${MAX_SEED}.`);
   }
+  const seedText = $("planSeed").value.trim();
+  const planSeed = seedText === "" ? randomSeed() : Number(seedText);
+  if (!Number.isInteger(planSeed) || planSeed < 0 || planSeed > MAX_SEED) problems.push(`Order seed must be an integer 0–${MAX_SEED}, or blank.`);
   if (selectedCaps.length !== cfg.models.length) problems.push("Model capabilities are still loading.");
   if (problems.length) return ($("batchError").textContent = problems.join("\n"));
   $("batchError").textContent = "";
 
   const batchId = new Date().toISOString().replace(/[:.]/g, "-");
-  const queue = buildJobs(batchId, $("batchName").value.trim());
+  const batchName = $("batchName").value.trim();
+  const plan = planBatch({ template: tpl(), pools: set.pools, locks: set.locks, models: cfg.models, perModel: cfg.perModel, seed: planSeed });
+  Object.assign(plan, { batch_name: batchName || undefined, group_id: set.id, rows: plan.rows.map((r) => ({ ...r, status: "planned", attempts: 0, files: [] })) });
+  last = { batchId, plan, jobs: buildJobs(plan, batchId, batchName) };
+  savePlan();
   emit("batch-started", { id: batchId, group: set.id }); // Analysis switches to this run
-  run = { stopped: false, total: queue.length, done: 0, failed: 0, cost: 0, started: Date.now() };
+  $("batchResults").innerHTML = "";
+  await execute(last.jobs);
+}
+
+// Generates the planned images of the last run that are still missing, with the same slot values.
+async function rerunMissing() {
+  if (!last || run?.active) return;
+  const missing = last.jobs.filter((j) => last.plan.rows[j.app.plan.index].status !== "done");
+  if (missing.length) await execute(missing);
+}
+
+// Runs jobs of the last run. A failed image is put back in the queue with the same slot values and tried
+// again (MAX_TRIES in all), so failures don't unbalance the batch.
+async function execute(jobs) {
+  run = { active: true, stopped: false, total: jobs.length, done: 0, failed: 0, cost: 0, started: Date.now() };
   $("runBatch").disabled = true;
   $("stopBatch").disabled = false;
+  $("rerunBatch").classList.add("hidden");
   $("batchErrors").innerHTML = "";
-  $("batchResults").innerHTML = "";
   renderProgress();
 
-  const worker = async () => {
-    while (queue.length && !run.stopped) {
-      const job = queue.shift();
-      try {
-        const body = await postImage(job);
-        run.cost += body.usage?.cost || 0;
+  const rows = last.plan.rows;
+  const results = await runQueue(jobs, async (job) => {
+    const attempt = rows[job.app.plan.index].attempts + 1; // counts tries from earlier runs of this plan too
+    const body = await postImage({ ...job, app: { ...job.app, plan: { ...job.app.plan, attempt } } });
+    run.cost += body.usage?.cost || 0;
+    if (!body.records?.length) throw new Error("No image returned");
+    return body;
+  }, {
+    concurrency: cfg.concurrency,
+    maxAttempts: MAX_TRIES,
+    stopped: () => run.stopped,
+    onTry: (item, body, retrying) => {
+      const job = item.job;
+      const row = rows[job.app.plan.index];
+      row.attempts++;
+      if (body) {
+        row.status = "done";
+        row.files.push(...(body.saved || []));
         addRecords(body.records || []);
         for (const r of body.records || []) {
           $("batchResults").insertAdjacentHTML("beforeend",
             `<figure data-file="${escapeHtml(r.file)}" title="${escapeHtml(r.prompt)}"><img src="${imgSrc(r.file)}" alt=""><figcaption>${escapeHtml(modelName(r.model))}</figcaption></figure>`);
         }
         for (const d of body.dropped || []) console.info(`[batch] ${job.model}: dropped ${d.key} (${d.reason})`);
-      } catch (e) {
-        run.failed++;
+      } else {
+        const e = item.error;
+        row.status = retrying ? "retrying" : "failed";
         $("batchErrors").insertAdjacentHTML("beforeend",
-          `<div>${escapeHtml(modelName(job.model))}: ${escapeHtml((e.status ? e.status + " " : "") + e.message)}</div>`);
+          `<div>${escapeHtml(modelName(job.model))}: ${escapeHtml((e.status ? e.status + " " : "") + e.message)}${retrying ? " (will retry with the same slots)" : ` (gave up after ${item.attempts} tries)`}</div>`);
       }
-      run.done++;
+      if (body || !retrying) run.done++;
+      if (!body && !retrying) run.failed++;
       renderProgress();
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(cfg.concurrency, queue.length) }, worker));
+    },
+  });
+  for (const r of results) if (r.status === "skipped") rows[r.job.app.plan.index].status = "skipped";
+  savePlan();
+
   const skipped = run.total - run.done;
-  toast(`Batch finished: ${run.done - run.failed} ok, ${run.failed} failed${skipped ? `, ${skipped} skipped` : ""}, ${fmtCost(run.cost)}.`, run.failed > 0);
+  const missing = rows.filter((r) => r.status !== "done").length;
+  toast(`Batch finished: ${run.done - run.failed} ok, ${run.failed} failed${skipped ? `, ${skipped} skipped` : ""}, ${fmtCost(run.cost)}. Order seed ${last.plan.seed}.`, run.failed > 0);
+  run.active = false;
   $("runBatch").disabled = false;
   $("stopBatch").disabled = true;
+  $("rerunBatch").textContent = `Re-run ${missing} missing`;
+  $("rerunBatch").classList.toggle("hidden", !missing);
   renderProgress(true);
+}
+
+// Keeps the run's plan, with each planned image's status, in data/batches/<batch id>.json.
+function savePlan() {
+  const { batchId, plan } = last;
+  // One save at a time, so an older copy never lands after a newer one.
+  last.saving = (last.saving || Promise.resolve()).then(() => api(`/api/batches/${encodeURIComponent(batchId)}`, { method: "PUT", body: plan })
+    .catch((e) => toast(`Could not save the slot plan: ${e.message}`, true)));
 }
 
 function renderProgress(finished = false) {
@@ -666,6 +790,7 @@ function renderProgress(finished = false) {
 }
 
 $("runBatch").onclick = runBatch;
+$("rerunBatch").onclick = rerunMissing;
 $("stopBatch").onclick = () => { if (run) { run.stopped = true; renderProgress(); } };
 $("batchResults").addEventListener("click", (e) => {
   const fig = e.target.closest("figure");

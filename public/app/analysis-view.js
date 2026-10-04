@@ -1,6 +1,6 @@
 // Analysis tab: which slot options predict high ratings, limiting factors per model, CSV/JSONL export.
 
-import { $, store, state, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
+import { $, store, state, api, toast, escapeHtml, fmtCost, on, emit, optionsHtml, modelName, download } from "./util.js";
 import { RATINGS, SOLID, isRated } from "../lib/ratings.js";
 import { groupName, groupPicker } from "./groups.js";
 import { compareSnapshot } from "./compare-view.js";
@@ -142,7 +142,18 @@ function stamp() {
 // One export button; the CSV is either one row per image or one row per pairwise pick.
 // Both carry global Bradley-Terry scores (all picks) and the Compare tab's current ranking (compare_*).
 $("exportKind").onchange = () => { opts.exportKind = $("exportKind").value; saveOpts(); };
-$("exportCsv").onclick = () => {
+$("exportCsv").onclick = async () => {
+  if (opts.exportKind === "plan") {
+    // The run's planned slot values per image, with each one's status (saved by the Batch tab).
+    if (!opts.batch) return toast("Select a run first: the slot plan belongs to one run.", true);
+    try {
+      const plan = await api(`/api/batches/${encodeURIComponent(opts.batch)}`);
+      download(`plan-${stamp()}.json`, JSON.stringify(plan, null, 2), "application/json");
+    } catch (e) {
+      toast(e.status === 404 ? "No slot plan was saved for this run (runs before slot plans existed have none)." : `Could not load the plan: ${e.message}`, true);
+    }
+    return;
+  }
   const bt = fitBradleyTerry(state.library.map((r) => r.file), state.comparisons);
   const compare = compareSnapshot();
   const recs = records();

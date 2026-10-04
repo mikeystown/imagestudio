@@ -7,13 +7,14 @@ import fs from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
-import { mergeCapabilities, filterParams } from "./public/lib/params.js";
+import { randomUUID, createHash } from "node:crypto";
+import { unionCapabilities, providerCaps, filterParams } from "./public/lib/params.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
 const OUTPUT_DIR = path.join(ROOT, "outputs");
 const POOL_DIR = path.join(ROOT, "data", "pool-sets");
+const BATCH_DIR = path.join(ROOT, "data", "batches"); // each run's slot plan: <batch id>.json
 const GROUPS_FILE = path.join(ROOT, "data", "groups.json");
 const COMPARISONS_FILE = path.join(ROOT, "data", "comparisons.jsonl"); // append-only pick log
 const STARS_FILE = path.join(ROOT, "data", "stars.json"); // { stars: { file: starred_at } }
@@ -99,7 +100,7 @@ async function getModels() {
   return body;
 }
 
-// Per-model capabilities from the endpoints listing, merged across providers.
+// Per-model capabilities from the endpoints listing: each provider's own, plus their union for automatic routing.
 // Falls back to the model list's supported_parameters if the endpoints call fails.
 const capsCache = new Map();
 async function getCapabilities(model) {
@@ -113,15 +114,16 @@ async function getCapabilities(model) {
     if (!endpoints.length) throw new Error("no endpoints");
     body = {
       model,
-      supported_parameters: mergeCapabilities(endpoints),
+      supported_parameters: unionCapabilities(endpoints),
       providers: endpoints.map((e) => e.provider_name),
       pricing: endpoints[0].pricing || [],
+      endpoints: endpoints.map((e) => ({ name: e.provider_name, slug: e.provider_slug, supported_parameters: e.supported_parameters || {}, pricing: e.pricing || [] })),
       source: "endpoints",
     };
   } catch (err) {
     const m = (await getModels()).data?.find((x) => x.id === model);
     if (!m) throw httpError(err.status || 502, `Could not load capabilities for ${model}: ${err.message}`);
-    body = { model, supported_parameters: m.supported_parameters || {}, providers: [], pricing: [], source: "models" };
+    body = { model, supported_parameters: m.supported_parameters || {}, providers: [], pricing: [], endpoints: [], source: "models" };
   }
   capsCache.set(model, { at: Date.now(), body });
   return body;
@@ -152,6 +154,7 @@ function toRecord(file, meta, mtime) {
     seed: meta.seed ?? null,
     resolution: meta.resolution ?? null,
     aspect_ratio: meta.aspect_ratio ?? null,
+    provider: meta.provider?.only?.[0] ?? null, // null: OpenRouter picked the provider
     cost: meta.usage?.cost ?? null,
     ms: meta.ms ?? null,
     created_at: meta.created_at || mtime?.toISOString() || null,
@@ -160,6 +163,10 @@ function toRecord(file, meta, mtime) {
     kind: meta.app?.kind ?? null,
     batch_id: meta.app?.batch_id ?? null,
     batch_name: meta.app?.batch_name ?? null,
+    plan_seed: meta.app?.plan?.seed ?? null, // the run's slot plan (data/batches/<batch_id>.json)
+    plan_index: meta.app?.plan?.index ?? null,
+    plan_cell: meta.app?.plan?.cell ?? null,
+    attempt: meta.app?.plan?.attempt ?? null,
     group_id: meta.app?.group_id ?? DEFAULT_GROUP,
     parent: meta.app?.parent ?? null,
     references: meta.app?.ref_files ?? null,
@@ -168,7 +175,7 @@ function toRecord(file, meta, mtime) {
 }
 
 async function generate(req, res) {
-  const { app = {}, ref_files = [], ...request } = await readJson(req);
+  const { app = {}, ref_files = [], provider = "", ...request } = await readJson(req);
   if (!request.model || !request.prompt) throw httpError(400, "model and prompt are required");
 
   if (ref_files.length) {
@@ -179,11 +186,24 @@ async function generate(req, res) {
     ];
   }
 
-  // Only send what the model supports; references are never silently dropped.
+  // Only send what the model (or the chosen provider) supports; references are never silently dropped.
   const caps = await getCapabilities(request.model);
-  const { payload, dropped } = filterParams(request, caps.supported_parameters);
+  if (provider && !caps.endpoints.some((e) => e.slug === provider)) throw httpError(400, `Unknown provider for ${request.model}: ${provider}`);
+  const { payload, dropped } = filterParams(request, providerCaps(caps, provider).supported_parameters);
   const refProblem = dropped.find((d) => d.key === "input_references");
   if (refProblem) throw httpError(400, `Reference images: ${refProblem.reason}`);
+  if (provider) payload.provider = { only: [provider], allow_fallbacks: false };
+
+  // Log multi-image requests exactly as sent, with image data shortened, to debug reference handling.
+  if (payload.input_references?.length > 1) {
+    const short = (url) => (url.startsWith("data:") ? `${url.slice(0, 30)}…[${url.length} chars, sha1 ${createHash("sha1").update(url).digest("hex").slice(0, 10)}]` : url);
+    const logged = {
+      ...payload,
+      input_references: payload.input_references.map((r) => ({ ...r, image_url: { ...r.image_url, url: short(r.image_url.url) } })),
+    };
+    console.log(`[multi-ref] ref_files in order: ${JSON.stringify(ref_files)}`);
+    console.log(`[multi-ref] POST ${API}/images\n${JSON.stringify(logged, null, 2)}`);
+  }
 
   const started = Date.now();
   const r = await fetch(`${API}/images`, {
@@ -479,6 +499,27 @@ async function poolSets(req, res, name) {
   throw httpError(405, "Method not allowed");
 }
 
+// ---------- batch plans: data/batches/<batch id>.json ----------
+// The slot plan of a run (see public/lib/design.js), with each planned image's status, for exports.
+async function batches(req, res, id) {
+  if (!/^[\w-]{1,80}$/.test(id)) throw httpError(400, "Invalid batch id");
+  const file = path.join(BATCH_DIR, `${id}.json`);
+  if (req.method === "GET") {
+    const text = await fs.readFile(file, "utf8").catch(() => {
+      throw httpError(404, "No plan saved for this run");
+    });
+    return sendJson(res, 200, JSON.parse(text));
+  }
+  if (req.method === "PUT") {
+    const plan = await readJson(req);
+    if (!Array.isArray(plan?.rows)) throw httpError(400, "A plan needs rows");
+    await fs.mkdir(BATCH_DIR, { recursive: true });
+    await writeJsonAtomic(file, { ...plan, batch_id: id, saved_at: new Date().toISOString() });
+    return sendJson(res, 200, { ok: true });
+  }
+  throw httpError(405, "Method not allowed");
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, "http://localhost");
   let rel;
@@ -517,6 +558,7 @@ http
       if (req.method === "POST" && pathname === "/api/uploads") return await upload(req, res);
       if (pathname === "/api/stars" || pathname.startsWith("/api/stars/")) return await stars(req, res, tail("/api/stars/"));
       if (pathname === "/api/comparisons" || pathname === "/api/comparisons/last") return await comparisons(req, res, new URL(req.url, "http://localhost"));
+      if (pathname.startsWith("/api/batches/")) return await batches(req, res, tail("/api/batches/"));
       if (pathname === "/api/pool-sets" || pathname.startsWith("/api/pool-sets/")) return await poolSets(req, res, tail("/api/pool-sets/") || "");
       if (req.method === "GET") return await serveStatic(req, res);
       sendJson(res, 405, { error: { message: "Method not allowed" } });

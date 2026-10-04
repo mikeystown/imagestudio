@@ -1,14 +1,16 @@
 // Generate tab: single prompt, single run (the original Image Studio screen).
 
-import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, addRecords, MAX_SEED, DEFAULT_MODEL } from "./util.js";
+import { $, store, state, api, getCaps, providerOptionsHtml, randomSeed, escapeHtml, imgSrc, addRecords, MAX_SEED, DEFAULT_MODEL } from "./util.js";
 import { openLightbox } from "./lightbox.js";
 import { activeGroup } from "./groups.js";
+import { providerCaps } from "../lib/params.js";
 
 let seedMode = "random";
 let refs = []; // data URLs
 let history = store.get("history", []);
 let selected = null;
-let caps = {}; // supported_parameters of the current model
+let modelCaps = null; // capabilities of the current model, all providers
+let caps = {}; // supported_parameters of the current model and provider
 
 const currentModel = () => state.models.find((m) => m.id === $("model").value);
 
@@ -18,6 +20,7 @@ export function initGenerate() {
   const has = (id) => state.models.some((m) => m.id === id);
   $("model").value = has(saved) ? saved : has(DEFAULT_MODEL) ? DEFAULT_MODEL : state.models[0]?.id;
   $("model").onchange = renderParams;
+  $("provider").onchange = () => { store.set("provider:" + $("model").value, $("provider").value); renderParams(); };
   renderParams();
 }
 
@@ -28,12 +31,17 @@ async function renderParams() {
   store.set("model", m.id);
   $("modelDesc").textContent = m.description || "";
   try {
-    caps = (await getCaps(m.id)).supported_parameters || {};
+    modelCaps = await getCaps(m.id);
   } catch (e) {
-    caps = m.supported_parameters || {};
+    modelCaps = { supported_parameters: m.supported_parameters || {}, endpoints: [] };
     $("error").textContent = "Could not load capabilities: " + e.message;
   }
   if (currentModel() !== m) return; // model changed while loading
+  // A provider choice only matters when several providers serve the model.
+  const multi = modelCaps.endpoints?.length > 1;
+  $("providerField").classList.toggle("hidden", !multi);
+  $("provider").innerHTML = providerOptionsHtml(modelCaps, multi ? store.get("provider:" + m.id, "") : "");
+  caps = providerCaps(modelCaps, $("provider").value).supported_parameters;
   const savedParams = store.get("params:" + m.id, {});
   const html = [];
 
@@ -118,7 +126,8 @@ async function generate() {
 
   const params = collectParams();
   store.set("params:" + m.id, params);
-  const payload = { model: m.id, prompt, ...params, app: { kind: "single", group_id: activeGroup()?.id } };
+  const provider = $("provider").value;
+  const payload = { model: m.id, prompt, ...params, provider: provider || undefined, app: { kind: "single", group_id: activeGroup()?.id } };
 
   if (caps.seed) {
     if (seedMode === "fixed") {
@@ -142,7 +151,7 @@ async function generate() {
     if (!body.saved?.length) throw new Error("No image returned.");
     const perImage = body.usage?.cost != null ? body.usage.cost / body.saved.length : undefined;
     const entries = body.saved.map((file) => ({
-      file, model: m.id, modelName: m.name, prompt, params, seed: payload.seed ?? null,
+      file, model: m.id, modelName: m.name, provider, prompt, params, seed: payload.seed ?? null,
       refs: refs.length, cost: perImage, ms: body.ms, at: Date.now(),
     }));
     history = entries.concat(history).slice(0, 200);
@@ -170,6 +179,7 @@ function show(entry) {
   const p = Object.entries(entry.params || {}).map(([k, v]) => `<span>${k}: <b>${escapeHtml(String(v))}</b></span>`).join("");
   $("meta").innerHTML = `
     <span>model: <b>${escapeHtml(entry.modelName || entry.model)}</b></span>
+    ${entry.provider ? `<span>provider: <b>${escapeHtml(entry.provider)}</b></span>` : ""}
     <span>seed: <b>${entry.seed ?? "—"}</b></span>
     ${p}
     ${entry.cost != null ? `<span>cost: <b>$${Number(entry.cost).toFixed(4)}</b></span>` : ""}
@@ -187,6 +197,7 @@ function show(entry) {
 
 function reuse(entry) {
   if (state.models.some((m) => m.id === entry.model)) $("model").value = entry.model;
+  store.set("provider:" + entry.model, entry.provider || "");
   store.set("params:" + entry.model, entry.params || {});
   $("prompt").value = entry.prompt;
   renderParams();

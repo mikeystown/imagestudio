@@ -1,8 +1,9 @@
 // Rate tab: keyboard-driven grid for rating images, plus actions (reproduce, reference, blend, lock picks).
 
-import { $, store, state, api, getCaps, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, typingInField, randomSeed, loadLibrary, MAX_SEED } from "./util.js";
+import { $, store, state, api, getCaps, providerOptionsHtml, escapeHtml, imgSrc, fmtCost, addRecords, emit, on, toast, optionsHtml, modelName, typingInField, randomSeed, loadLibrary, MAX_SEED } from "./util.js";
 import { RATINGS, SOLID, TAGS, TAG_KEYS, isRated } from "../lib/ratings.js";
 import { postImage } from "./batch.js";
+import { providerCaps } from "../lib/params.js";
 import { openLightbox, updateLightbox, closeLightbox, lightboxOpen } from "./lightbox.js";
 import { activeGroup, groupList, groupName, isKnownGroup } from "./groups.js";
 import { isStarred, toggleStar } from "./stars.js";
@@ -271,6 +272,7 @@ function renderDetail() {
     <div class="meta">
       <span>model: <b>${escapeHtml(modelName(r.model))}</b></span>
       <span>seed: <b>${r.seed ?? "—"}</b></span>
+      ${r.provider ? `<span>provider: <b>${escapeHtml(r.provider)}</b></span>` : ""}
       ${r.resolution ? `<span>resolution: <b>${escapeHtml(r.resolution)}</b></span>` : ""}
       ${r.aspect_ratio ? `<span>aspect: <b>${escapeHtml(r.aspect_ratio)}</b></span>` : ""}
       <span>cost: <b>${fmtCost(r.cost)}</b></span>
@@ -380,6 +382,7 @@ function openAction(kind, recs) {
   const preferred = eligible.some((m) => m.id === recs[0].model) ? recs[0].model : eligible[0]?.id;
   $("dlgModel").innerHTML = eligible.map((m) => `<option value="${m.id}" ${m.id === preferred ? "selected" : ""}>${escapeHtml(m.name)}</option>`).join("");
   $("dlgModel").disabled = kind === "reproduce";
+  $("dlgProvider").dataset.model = ""; // pick the provider afresh for this dialog
   $("dlgPrompt").value = defaultPrompt(kind, recs);
   $("dlgPrompt").readOnly = kind === "reproduce";
   $("dlgSeed").value = kind === "reproduce" ? recs[0].seed ?? "" : "";
@@ -394,12 +397,20 @@ async function refreshDialogModel() {
   const model = $("dlgModel").value;
   if (!model || !action) return;
   const r = action.recs[0];
-  let sp = {};
+  let caps = null;
   try {
-    sp = (await getCaps(model)).supported_parameters || {};
+    caps = await getCaps(model);
   } catch (e) {
     $("dlgError").textContent = e.message;
   }
+  if ($("dlgModel").value !== model) return; // model changed while loading
+  // Keep the provider while the model stays; otherwise start from the original image's provider (or Auto).
+  const multi = caps?.endpoints?.length > 1;
+  const keep = $("dlgProvider").dataset.model === model ? $("dlgProvider").value : r.model === model ? r.provider : "";
+  $("dlgProviderField").classList.toggle("hidden", !multi);
+  $("dlgProvider").innerHTML = providerOptionsHtml(caps, multi ? keep : "");
+  $("dlgProvider").dataset.model = model;
+  const sp = providerCaps(caps, $("dlgProvider").value).supported_parameters;
   const res = sp.resolution?.values || [];
   const ars = sp.aspect_ratio?.values || [];
   const wantRes = action.kind === "reproduce" ? (res.includes("2K") ? "2K" : r.resolution) : r.resolution;
@@ -416,14 +427,16 @@ async function refreshDialogModel() {
   $("dlgSeed").disabled = !sp.seed;
 }
 $("dlgModel").onchange = refreshDialogModel;
+$("dlgProvider").onchange = refreshDialogModel;
 
 $("dlgGo").onclick = async () => {
   const { kind, recs } = action;
   const model = $("dlgModel").value;
   const prompt = $("dlgPrompt").value.trim();
   if (!prompt) return ($("dlgError").textContent = "Enter a prompt.");
-  const sp = (await getCaps(model).catch(() => ({}))).supported_parameters || {};
-  const payload = { model, prompt, app: { kind, parent: kind === "blend" ? recs.map((r) => r.file) : recs[0].file, group_id: activeGroup()?.id } };
+  const provider = $("dlgProvider").value;
+  const sp = providerCaps(await getCaps(model).catch(() => null), provider).supported_parameters;
+  const payload = { model, prompt, provider: provider || undefined, app: { kind, parent: kind === "blend" ? recs.map((r) => r.file) : recs[0].file, group_id: activeGroup()?.id } };
   if (kind !== "reproduce") payload.ref_files = recs.map((r) => r.file);
   if ($("dlgRes").value) payload.resolution = $("dlgRes").value;
   if ($("dlgAR").value) payload.aspect_ratio = $("dlgAR").value;

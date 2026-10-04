@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mergeCapabilities, filterParams, commonEnumValues, estimateImageCost } from "../public/lib/params.js";
+import { unionCapabilities, providerCaps, filterParams, commonEnumValues, estimateImageCost } from "../public/lib/params.js";
 
 const seedream = {
   resolution: { type: "enum", values: ["1K", "2K"] },
@@ -49,18 +49,33 @@ test("filterParams with no capabilities sends only model and prompt", () => {
   assert.deepEqual(filterParams({ model: "m", prompt: "p", seed: 1 }, undefined).payload, { model: "m", prompt: "p" });
 });
 
-test("mergeCapabilities with one endpoint returns its parameters", () => {
-  assert.deepEqual(mergeCapabilities([{ supported_parameters: seedream }]), seedream);
-  assert.deepEqual(mergeCapabilities([]), {});
+test("unionCapabilities with one endpoint returns its parameters", () => {
+  assert.deepEqual(unionCapabilities([{ supported_parameters: seedream }]), seedream);
+  assert.deepEqual(unionCapabilities([]), {});
 });
 
-test("mergeCapabilities intersects keys, enum values and ranges across providers", () => {
-  const a = { seed: { type: "boolean" }, resolution: { type: "enum", values: ["1K", "2K", "4K"] }, n: { type: "range", min: 1, max: 4 }, quality: { type: "enum", values: ["low"] } };
-  const b = { resolution: { type: "enum", values: ["2K", "4K", "8K"] }, n: { type: "range", min: 2, max: 10 }, quality: { type: "enum", values: ["high"] } };
-  assert.deepEqual(mergeCapabilities([{ supported_parameters: a }, { supported_parameters: b }]), {
-    resolution: { type: "enum", values: ["2K", "4K"] },
-    n: { type: "range", min: 2, max: 4 },
+test("unionCapabilities combines keys, enum values and ranges across providers", () => {
+  // e.g. Nano Banana Pro: Google AI Studio offers 4K, Google Vertex doesn't.
+  const a = { seed: { type: "boolean" }, resolution: { type: "enum", values: ["1K", "2K", "4K"] }, n: { type: "range", min: 1, max: 4 } };
+  const b = { resolution: { type: "enum", values: ["1K", "2K"] }, n: { type: "range", min: 2, max: 10 } };
+  assert.deepEqual(unionCapabilities([{ supported_parameters: b }, { supported_parameters: a }]), {
+    resolution: { type: "enum", values: ["1K", "2K", "4K"] },
+    n: { type: "range", min: 1, max: 10 },
+    seed: { type: "boolean" },
   });
+  assert.deepEqual(b.resolution.values, ["1K", "2K"]); // inputs untouched
+});
+
+test("providerCaps picks one provider, else the automatic-routing view", () => {
+  const caps = {
+    supported_parameters: { resolution: { type: "enum", values: ["1K", "2K", "4K"] } }, pricing: [{ cost_usd: 1 }],
+    endpoints: [{ slug: "google-vertex/global", supported_parameters: { resolution: { type: "enum", values: ["1K", "2K"] } }, pricing: [{ cost_usd: 2 }] }],
+  };
+  assert.deepEqual(providerCaps(caps, "google-vertex/global").supported_parameters.resolution.values, ["1K", "2K"]);
+  assert.deepEqual(providerCaps(caps, "google-vertex/global").pricing, [{ cost_usd: 2 }]);
+  assert.deepEqual(providerCaps(caps, "").supported_parameters.resolution.values, ["1K", "2K", "4K"]);
+  assert.deepEqual(providerCaps(caps, "gone").pricing, [{ cost_usd: 1 }]);
+  assert.deepEqual(providerCaps(undefined, ""), { supported_parameters: {}, pricing: [] });
 });
 
 test("commonEnumValues finds values every selected model accepts", () => {

@@ -83,6 +83,11 @@ export function toast(msg, isError = false) {
 
 export const typingInField = (e) => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
 
+// Provider <option> list for a model's capabilities: "Auto" (OpenRouter routes) plus each provider by slug.
+export const providerOptionsHtml = (caps, selected) =>
+  `<option value="">Auto</option>` +
+  (caps?.endpoints || []).map((e) => `<option value="${escapeHtml(e.slug)}" ${e.slug === selected ? "selected" : ""}>${escapeHtml(e.name)}</option>`).join("");
+
 // <option> list helper: values -> HTML, with one selected.
 export const optionsHtml = (values, selected, { blank } = {}) =>
   (blank != null ? `<option value="">${escapeHtml(blank)}</option>` : "") +

@@ -4,27 +4,27 @@
 // Fields that are part of every request rather than model parameters.
 const ALWAYS_SENT = new Set(["model", "prompt"]);
 
-// Combine per-provider supported_parameters into what every provider accepts,
-// since a request may be routed to any of them.
-export function mergeCapabilities(endpoints) {
-  const lists = (endpoints || []).map((e) => e?.supported_parameters || {});
-  if (!lists.length) return {};
+// What a request with automatic provider routing can use: the union of every provider's parameters.
+// OpenRouter routes each request to a provider that supports the values sent (e.g. 4K goes to a provider
+// that offers 4K), so an option offered by any provider is usable.
+export function unionCapabilities(endpoints) {
   const out = {};
-  for (const [key, first] of Object.entries(lists[0])) {
-    const specs = lists.map((sp) => sp[key]);
-    if (specs.some((s) => !s || s.type !== first.type)) continue;
-    if (first.type === "enum") {
-      const values = first.values.filter((v) => specs.every((s) => s.values?.includes(v)));
-      if (values.length) out[key] = { type: "enum", values };
-    } else if (first.type === "range") {
-      const min = Math.max(...specs.map((s) => s.min));
-      const max = Math.min(...specs.map((s) => s.max));
-      if (min <= max) out[key] = { type: "range", min, max };
-    } else {
-      out[key] = { ...first };
+  for (const sp of (endpoints || []).map((e) => e?.supported_parameters || {})) {
+    for (const [key, spec] of Object.entries(sp)) {
+      const cur = out[key];
+      if (!cur) out[key] = structuredClone(spec);
+      else if (cur.type !== spec.type) continue;
+      else if (spec.type === "enum") cur.values = [...new Set([...cur.values, ...spec.values])];
+      else if (spec.type === "range") Object.assign(cur, { min: Math.min(cur.min, spec.min), max: Math.max(cur.max, spec.max) });
     }
   }
   return out;
+}
+
+// Parameters and pricing for one provider (by slug), or for automatic routing when slug is empty or unknown.
+export function providerCaps(caps, slug) {
+  const e = slug && caps?.endpoints?.find((x) => x.slug === slug);
+  return e ? { supported_parameters: e.supported_parameters, pricing: e.pricing } : { supported_parameters: caps?.supported_parameters || {}, pricing: caps?.pricing || [] };
 }
 
 // Check one value against its capability spec. Returns a reason string if invalid.

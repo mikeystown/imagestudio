@@ -93,7 +93,7 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map(), com
   const slots = [...new Set(records.flatMap((r) => Object.keys(r.picks || {})))].sort();
   const header = [
     "file", "created_at", "model", "seed", "resolution", "aspect_ratio", "cost_usd",
-    "rating_1_7", "rating_label", "tags", "notes", "starred", "kind", "group", "batch_id", "batch_name", "parent", "references", "template", "prompt",
+    "rating_1_7", "rating_label", "tags", "notes", "starred", "kind", "group", "batch_id", "batch_name", "plan_seed", "plan_index", "plan_cell", "attempt", "parent", "references", "template", "prompt",
     "bt_score", "bt_se", "n_comparisons",
     "compare_rank", "compare_cluster", "compare_score", "compare_se", "compare_n",
     ...slots.map((s) => `slot_${s}`),
@@ -101,7 +101,7 @@ export function imagesCSV(records, { groupName = (id) => id, bt = new Map(), com
   const rows = records.map((r) => [
     r.file, r.created_at, r.model, r.seed, r.resolution, r.aspect_ratio, r.cost,
     isRated(r) ? scoreOf(r) : "", isRated(r) ? RATINGS[r.rating.value] : "",
-    (r.rating?.tags || []).join("; "), r.rating?.notes, starred(r.file), r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.parent, (r.references || []).join("; "), r.template, r.prompt,
+    (r.rating?.tags || []).join("; "), r.rating?.notes, starred(r.file), r.kind, r.group_id ? groupName(r.group_id) : "", r.batch_id, r.batch_name, r.plan_seed, r.plan_index, r.plan_cell, r.attempt, r.parent, (r.references || []).join("; "), r.template, r.prompt,
     bt.get(r.file)?.score?.toFixed(4), bt.get(r.file)?.se?.toFixed(4), bt.get(r.file)?.n ?? 0,
     ...compareCells(compare.get(r.file)),
     ...slots.map((s) => r.picks?.[s]),
