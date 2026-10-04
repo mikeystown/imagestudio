@@ -1,5 +1,7 @@
 // Groups: a template + pools + locks, plus every image generated while the group was active.
 // Stored on the server in data/groups.json; images carry the group id in their sidecar.
+// Each group keeps its own versions of template / reference template / pools / locks and is always on one
+// (current); the group's top-level fields are the live copy of that version.
 
 import { $, store, state, api, emit, toast, escapeHtml } from "./util.js";
 import { defaultPoolSet } from "../lib/defaults.js";
@@ -10,13 +12,41 @@ export const isKnownGroup = (id) => !state.groups || groupList().some((g) => g.i
 export const activeGroup = () => groupList().find((g) => g.id === state.groups.active) || groupList()[0];
 export const groupName = (id) => groupList().find((g) => g.id === id)?.name || id;
 
+// The part of a group that a version holds.
+export const versionFields = (x) =>
+  structuredClone({ template: x.template ?? "", refTemplate: x.refTemplate ?? null, pools: x.pools || {}, locks: x.locks || {} });
+
+// Sets saved before versions existed (data/pool-sets), as version contents.
+async function savedSets() {
+  const out = [];
+  for (const v of (await api("/api/pool-sets")).versions || []) {
+    try {
+      out.push({ name: v.name, created_at: v.created_at, ...versionFields(await api(`/api/pool-sets/${encodeURIComponent(v.name)}`)) });
+    } catch (e) {
+      console.warn(`Skipping saved set ${v.name}: ${e.message}`);
+    }
+  }
+  return out;
+}
+
 export async function loadGroups() {
   state.groups = await api("/api/groups");
-  // First run with groups: the existing group takes over the template/pools the Batch tab was using.
   let changed = false;
+  let sets = null;
   for (const g of state.groups.groups) {
+    // First run with groups: the existing group takes over the template/pools the Batch tab was using.
     if (g.template == null) {
       Object.assign(g, store.get("batch:set", null) || defaultPoolSet());
+      changed = true;
+    }
+    // First run with versions: the group's current state becomes v1; earlier saved sets become versions too.
+    if (!g.versions?.length) {
+      sets ??= await savedSets().catch(() => []);
+      g.versions = [
+        { id: "v1", name: "v1", created_at: g.created_at || new Date().toISOString(), ...versionFields(g) },
+        ...sets.map((x, i) => ({ id: `set-${i + 1}`, ...structuredClone(x) })),
+      ];
+      g.current = "v1";
       changed = true;
     }
   }
@@ -49,13 +79,13 @@ export function createGroup() {
     id: `g-${Date.now().toString(36)}`,
     name: `Group ${n}`,
     created_at: new Date().toISOString(),
-    template: from.template,
-    pools: structuredClone(from.pools),
-    locks: structuredClone(from.locks || {}),
+    ...versionFields(from),
     refMode: !!from.refMode,
-    refTemplate: from.refTemplate,
     refs: [...(from.refs || [])],
   };
+  // The new group starts with one version: a copy of what the previous group was on.
+  g.versions = [{ id: "v1", name: "v1", created_at: g.created_at, ...versionFields(from) }];
+  g.current = "v1";
   state.groups.groups.push(g);
   state.groups.active = g.id;
   saveGroupsNow();

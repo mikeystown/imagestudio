@@ -397,15 +397,22 @@ async function groups(req, res) {
     if (typeof g.pools !== "object" || !g.pools) throw httpError(400, "pools must be an object");
     if (g.refTemplate != null && typeof g.refTemplate !== "string") throw httpError(400, "refTemplate must be a string");
     if (g.refs != null && (!Array.isArray(g.refs) || g.refs.some((f) => !outputPath(f)))) throw httpError(400, "refs must be output image names");
+    if (g.versions != null) {
+      if (!Array.isArray(g.versions) || g.versions.some((v) => typeof v?.id !== "string" || typeof v.name !== "string" || typeof v.template !== "string" || typeof v.pools !== "object" || !v.pools))
+        throw httpError(400, "versions must be a list of { id, name, template, pools }");
+      if (g.versions.length && !g.versions.some((v) => v.id === g.current)) throw httpError(400, "current must be one of the group's versions");
+    }
     ids.add(g.id);
   }
   if (!ids.has(active)) throw httpError(400, "active must be one of the groups");
   await fs.mkdir(path.dirname(GROUPS_FILE), { recursive: true });
   await writeJsonAtomic(GROUPS_FILE, {
     active,
-    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs, version }) => ({
+    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs, versions, current }) => ({
       id, name: name.trim(), created_at, template, pools, locks: locks || {},
-      version: typeof version === "string" ? version : undefined, // saved version last loaded or saved
+      // The group's versions of its templates/pools/locks; the fields above mirror the current one.
+      versions: versions?.map(({ id, name, created_at, template, refTemplate, pools, locks }) => ({ id, name, created_at, template, refTemplate: refTemplate ?? null, pools, locks: locks || {} })),
+      current: typeof current === "string" ? current : undefined,
       // Reference-image batches: their own template, whether that mode is on, and the reference files.
       refTemplate: refTemplate ?? undefined, refMode: !!refMode, refs: refs || [],
     })),

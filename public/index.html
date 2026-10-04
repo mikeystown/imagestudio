@@ -269,29 +269,21 @@
             <button type="button" data-mode="ref">With reference images</button>
           </span>
         </span>
-        <div class="row wrap" title="Saved versions of the templates, slot pools and locks">
-          <span class="desc">Versions</span>
-          <button type="button" id="verPrev" title="Previous saved version">‹</button>
+        <div class="row wrap" title="This group's versions of its templates, slot pools and locks. Edits save to the current version automatically.">
+          <span class="desc">Version</span>
+          <button type="button" id="verPrev" title="Previous version">‹</button>
           <select id="verSelect" style="width:auto;max-width:260px"></select>
-          <button type="button" id="verNext" title="Next saved version">›</button>
-          <span class="desc warn hidden" id="verDirty"></span>
-          <input type="text" id="verName" placeholder="name (optional)" maxlength="40" style="width:140px">
-          <button type="button" id="verSaveNew" title="Save the current template, pools and locks as a new version">+ Save as new version</button>
-          <button type="button" id="verSave" title="Overwrite the version you are on with the current state">Save</button>
+          <button type="button" id="verNext" title="Next version">›</button>
+          <span class="desc" id="verCount"></span>
+          <input type="text" id="verName" placeholder="new version name (optional)" maxlength="40" style="width:190px">
+          <button type="button" id="verAdd" title="Start a new, blank version">+ Add new version</button>
           <button type="button" id="verDelete">Delete</button>
-          <button type="button" id="poolReset" title="Restore the default template and pools">Defaults</button>
+          <button type="button" id="poolReset" title="Fill this version with the default template and pools">Defaults</button>
         </div>
-      </div>
-      <div class="panel hidden" id="verConfirm" style="border-color:var(--warn);margin:8px 0;padding:10px">
-        <span id="verConfirmText"></span>
-        <span class="row" style="margin-top:6px">
-          <button type="button" data-c="save">Save them, then switch</button>
-          <button type="button" data-c="discard">Discard and switch</button>
-          <button type="button" data-c="cancel">Cancel</button>
-        </span>
       </div>
       <textarea id="template" spellcheck="false"></textarea>
       <p class="desc" id="templateNote" style="margin-top:6px"></p>
+      <p class="desc" style="margin-top:2px">Changes save to the current version automatically.</p>
       <p class="desc" style="margin-top:8px"><b>Sample:</b> <span id="preview"></span> <button type="button" id="rePreview" title="New sample" style="padding:0 6px">🎲</button></p>
     </section>
     <section class="panel hidden" id="refPanel">

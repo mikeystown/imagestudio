@@ -4,7 +4,7 @@ import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost,
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
 import { commonEnumValues, estimateImageCost } from "../lib/params.js";
 import { defaultPoolSet, DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS } from "../lib/defaults.js";
-import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups } from "./groups.js";
+import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups, versionFields } from "./groups.js";
 import { openLightbox } from "./lightbox.js";
 
 // The active group (groups.js): { id, name, template, pools: {slot: [{value, weight}]}, locks: {slot: value},
@@ -25,10 +25,10 @@ let cfg = {
 let run = null;
 let selectedCaps = []; // capabilities of cfg.models, same order
 
-// Save the group (debounced) and refresh the "unsaved changes" marker.
+// Every edit saves straight into the current version, then the group (debounced).
 const saveSet = () => {
+  syncVersion();
   saveGroups();
-  renderVersionState();
 };
 const saveCfg = () => store.set("batch:cfg", cfg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,7 +45,7 @@ export function initBatch() {
   renderTemplateInfo();
   renderModelList();
   refreshSelection();
-  refreshVersions();
+  renderVersions();
   setSeedMode(cfg.seedMode);
 }
 
@@ -80,8 +80,7 @@ on("groups", () => {
   showMode();
   renderGroupBar(true);
   renderWarnings();
-  $("verConfirm").classList.add("hidden");
-  refreshVersions();
+  renderVersions();
 });
 on("library", () => set && renderGroupBar());
 
@@ -117,8 +116,9 @@ function setRefMode(on) {
 // First switch to reference mode: start from the default reference template and add starter pools for its
 // slots, without touching pools the group already has.
 function ensureRefTemplate() {
-  if (set.refTemplate == null) set.refTemplate = DEFAULT_REF_TEMPLATE;
   set.refs ??= [];
+  if (set.refTemplate != null) return; // a version that has its own (possibly blank) reference template
+  set.refTemplate = DEFAULT_REF_TEMPLATE;
   for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) if (!set.pools[slot]?.length) set.pools[slot] = structuredClone(opts);
 }
 document.querySelectorAll("#tplMode button").forEach((b) => (b.onclick = () => setRefMode(b.dataset.mode === "ref")));
@@ -317,190 +317,93 @@ $("unlockAll").onclick = () => {
   renderTemplateInfo();
 };
 
-// ---------- saved versions of the templates + slot pools (data/pool-sets) ----------
-// A version holds both templates, every slot pool and the locks. The group remembers which version it is on
-// (set.version); "unsaved changes" compares the working copy with that version as saved.
-let versions = []; // [{ name, created_at, saved_at }], oldest first
-const versionCache = new Map(); // name -> saved content
-let pendingSwitch = null; // version waiting on the unsaved-changes prompt
+// ---------- versions ----------
+// Each group has its own versions (template, reference template, pools, locks) and is always on one of them;
+// every edit is saved into that version (see saveSet). "Add new version" starts a blank one.
+const currentVersion = () => set.versions?.find((v) => v.id === set.current);
 
-// JSON with sorted keys, so key order never counts as a change.
-const stable = (v) =>
-  Array.isArray(v) ? `[${v.map(stable).join(",")}]`
-  : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`
-  : JSON.stringify(v ?? null);
-// What a version stores (blank options and empty pools don't count).
-const versionContent = (x) => ({
-  template: x.template ?? "",
-  refTemplate: x.refTemplate ?? null,
-  pools: Object.fromEntries(Object.entries(x.pools || {}).map(([k, v]) => [k, normalizeOptions(v)]).filter(([, v]) => v.length)),
-  locks: x.locks || {},
-});
-const knownVersion = () => versions.some((v) => v.name === set.version);
-const isDirty = () => {
-  if (!knownVersion()) return true;
-  const saved = versionCache.get(set.version);
-  if (!saved) return false;
-  const current = versionContent(set);
-  // Versions saved before reference templates existed don't cover one, so the group's own doesn't count.
-  if (saved.refTemplate == null) current.refTemplate = null;
-  return stable(current) !== stable(versionContent(saved));
-};
-
-async function fetchVersion(name) {
-  if (!versionCache.has(name)) versionCache.set(name, await api(`/api/pool-sets/${encodeURIComponent(name)}`));
-  return versionCache.get(name);
-}
-
-async function refreshVersions() {
-  try {
-    versions = (await api("/api/pool-sets")).versions;
-    if (knownVersion()) await fetchVersion(set.version);
-  } catch (e) {
-    toast("Could not list saved versions: " + e.message, true);
-  }
-  renderVersions();
+// Copy the live template/pools/locks into the current version.
+function syncVersion() {
+  const v = currentVersion();
+  if (v) Object.assign(v, versionFields(set));
 }
 
 const versionLabel = (v) =>
-  `${v.name} · ${new Date(v.saved_at || v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
-
-// Neighbours for ‹ ›; from an unsaved working copy, ‹ goes to the newest and › to the oldest.
-function neighbours() {
-  const i = versions.findIndex((v) => v.name === set.version);
-  return i < 0 ? [versions.at(-1), versions[0]] : [versions[i - 1], versions[i + 1]];
-}
+  `${v.name} · ${new Date(v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 
 function renderVersions() {
-  const known = knownVersion();
-  $("verSelect").innerHTML =
-    (known ? "" : `<option value="" selected>${versions.length ? "— not saved as a version —" : "no saved versions yet"}</option>`) +
-    versions.map((v) => `<option value="${escapeHtml(v.name)}" ${v.name === set.version ? "selected" : ""}>${escapeHtml(versionLabel(v))}</option>`).join("");
-  const [prev, next] = neighbours();
-  $("verPrev").disabled = !prev;
-  $("verNext").disabled = !next;
-  $("verSave").disabled = !known;
-  $("verDelete").disabled = !known;
-  renderVersionState();
+  const list = set.versions || [];
+  const i = list.findIndex((v) => v.id === set.current);
+  $("verSelect").innerHTML = list.map((v) => `<option value="${escapeHtml(v.id)}" ${v.id === set.current ? "selected" : ""}>${escapeHtml(versionLabel(v))}</option>`).join("");
+  $("verPrev").disabled = i <= 0;
+  $("verNext").disabled = i < 0 || i >= list.length - 1;
+  $("verDelete").disabled = list.length <= 1;
+  $("verCount").textContent = list.length > 1 ? `${i + 1} of ${list.length}` : "";
 }
 
-function renderVersionState() {
-  if (!set || !$("verDirty")) return;
-  const text = !knownVersion() ? "● not saved as a version" : isDirty() ? "● unsaved changes" : "";
-  $("verDirty").textContent = text;
-  $("verDirty").classList.toggle("hidden", !text);
+function switchVersion(id) {
+  const v = set.versions?.find((x) => x.id === id);
+  if (!v || id === set.current) return;
+  syncVersion(); // already saved on every edit; this just makes sure
+  set.current = id;
+  Object.assign(set, versionFields(v));
+  if (set.refMode) ensureRefTemplate();
+  saveGroups();
+  showMode();
+  renderVersions();
 }
 
-// Switch to a saved version; with unsaved changes, ask first.
-function requestVersion(name) {
-  if (!name || name === set.version) return;
-  if (isDirty()) {
-    pendingSwitch = name;
-    $("verConfirmText").textContent = knownVersion()
-      ? `“${set.version}” has unsaved changes.`
-      : "Your current template and pools aren't saved as a version.";
-    $("verConfirm").classList.remove("hidden");
-    renderVersions(); // put the dropdown back on the current version
-    return;
-  }
-  applyVersion(name);
-}
-
-async function applyVersion(name) {
-  try {
-    const v = await fetchVersion(name);
-    Object.assign(set, { template: v.template, pools: structuredClone(v.pools), locks: structuredClone(v.locks || {}) });
-    if (v.refTemplate != null) set.refTemplate = v.refTemplate;
-    if (set.refMode) ensureRefTemplate();
-    set.version = name;
-    saveSet();
-    showMode();
-    renderVersions();
-    toast(`Loaded “${name}”.`);
-  } catch (e) {
-    toast(`Could not load “${name}”: ${e.message}`, true);
-  }
-}
-
-async function putVersion(name) {
-  $("verConfirm").classList.add("hidden");
-  pendingSwitch = null;
-  const body = versionContent(set);
-  await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "PUT", body });
-  versionCache.set(name, body);
-  set.version = name;
-  saveSet();
-}
-
-// "v4", or "v4 <label>" when a name is typed (letters, digits, spaces, - and _ only).
+// "v4", or "v4 <label>" when a name is typed.
 function nextVersionName() {
-  const label = $("verName").value.replace(/[^\w\- ]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
-  let n = versions.length + 1;
-  const taken = (k) => versions.some((v) => v.name === `v${k}` || v.name.startsWith(`v${k} `));
-  while (taken(n)) n++;
+  const label = $("verName").value.replace(/\s+/g, " ").trim().slice(0, 40);
+  const n = Math.max(0, ...(set.versions || []).map((v) => Number(v.name.match(/^v(\d+)/)?.[1] || 0))) + 1;
   return label ? `v${n} ${label}` : `v${n}`;
 }
 
-async function saveAsNewVersion() {
-  const name = nextVersionName();
-  try {
-    await putVersion(name);
-    $("verName").value = "";
-    await refreshVersions();
-    toast(`Saved as “${name}”.`);
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-async function saveCurrentVersion() {
-  if (!knownVersion()) return saveAsNewVersion();
-  try {
-    await putVersion(set.version);
-    await refreshVersions();
-    toast(`Saved “${set.version}”.`);
-  } catch (e) {
-    toast(e.message, true);
-  }
-}
-
-$("verSelect").onchange = () => requestVersion($("verSelect").value);
-$("verPrev").onclick = () => requestVersion(neighbours()[0]?.name);
-$("verNext").onclick = () => requestVersion(neighbours()[1]?.name);
-$("verSaveNew").onclick = saveAsNewVersion;
-$("verSave").onclick = saveCurrentVersion;
-$("verName").addEventListener("keydown", (e) => { if (e.key === "Enter") saveAsNewVersion(); });
-$("verConfirm").addEventListener("click", async (e) => {
-  const choice = e.target.closest("button")?.dataset.c;
-  if (!choice) return;
-  const target = pendingSwitch;
-  pendingSwitch = null;
-  $("verConfirm").classList.add("hidden");
-  if (choice === "save") {
-    await saveCurrentVersion();
-    applyVersion(target);
-  } else if (choice === "discard") applyVersion(target);
-});
-$("verDelete").onclick = async () => {
-  const name = set.version;
-  if (!knownVersion()) return;
-  if ($("verDelete").dataset.confirm !== name) {
-    $("verDelete").dataset.confirm = name;
-    $("verDelete").textContent = "Click again to delete";
+$("verAdd").onclick = () => {
+  syncVersion();
+  const v = {
+    id: `v-${Date.now().toString(36)}`,
+    name: nextVersionName(),
+    created_at: new Date().toISOString(),
+    template: "", refTemplate: "", pools: {}, locks: {}, // a blank version
+  };
+  set.versions.push(v);
+  set.current = v.id;
+  Object.assign(set, versionFields(v));
+  $("verName").value = "";
+  saveGroups();
+  showMode();
+  renderVersions();
+  $("template").focus();
+  toast(`Started “${v.name}” (blank). “Defaults” fills in the default template if you want a starting point.`);
+};
+$("verName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verAdd").click(); });
+$("verSelect").onchange = () => switchVersion($("verSelect").value);
+$("verPrev").onclick = () => switchVersion(set.versions[set.versions.findIndex((v) => v.id === set.current) - 1]?.id);
+$("verNext").onclick = () => switchVersion(set.versions[set.versions.findIndex((v) => v.id === set.current) + 1]?.id);
+$("verDelete").onclick = () => {
+  const list = set.versions || [];
+  const v = currentVersion();
+  if (!v || list.length <= 1) return;
+  if ($("verDelete").dataset.confirm !== v.id) {
+    $("verDelete").dataset.confirm = v.id;
+    $("verDelete").textContent = `Click again to delete ${v.name}`;
     setTimeout(() => { delete $("verDelete").dataset.confirm; $("verDelete").textContent = "Delete"; }, 3000);
     return;
   }
   delete $("verDelete").dataset.confirm;
   $("verDelete").textContent = "Delete";
-  $("verConfirm").classList.add("hidden");
-  try {
-    await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "DELETE" });
-    versionCache.delete(name);
-    await refreshVersions(); // the working copy stays; it is now "not saved as a version"
-    toast(`Deleted “${name}”. Your current template and pools are unchanged.`);
-  } catch (e) {
-    toast(e.message, true);
-  }
+  const i = list.indexOf(v);
+  list.splice(i, 1);
+  const next = list[Math.min(i, list.length - 1)];
+  set.current = next.id;
+  Object.assign(set, versionFields(next));
+  if (set.refMode) ensureRefTemplate();
+  saveGroups();
+  showMode();
+  renderVersions();
+  toast(`Deleted “${v.name}”; now on “${next.name}”.`);
 };
 $("poolReset").onclick = () => {
   if (set.refMode) {
@@ -509,12 +412,16 @@ $("poolReset").onclick = () => {
     for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) set.pools[slot] = structuredClone(opts);
     for (const slot of Object.keys(DEFAULT_REF_POOLS)) delete set.locks[slot];
   } else {
-    Object.assign(set, defaultPoolSet());
-    if (set.refTemplate != null) ensureRefTemplate(); // keep the reference template's pools
+    // Keep pools only the reference template uses; everything else returns to the defaults.
+    const defaults = defaultPoolSet();
+    const refOnly = findSlots(set.refTemplate ?? "").filter((slot) => !(slot in defaults.pools) && set.pools[slot]);
+    const kept = Object.fromEntries(refOnly.map((slot) => [slot, set.pools[slot]]));
+    Object.assign(set, defaults);
+    Object.assign(set.pools, kept);
   }
   saveSet();
   showMode();
-  toast(`Restored the default ${set.refMode ? "reference-image template" : "template and pools"} (saved versions are unchanged).`);
+  toast(`Filled “${currentVersion()?.name}” with the default ${set.refMode ? "reference-image template" : "template and pools"}.`);
 };
 
 // ---------- models & run settings ----------
@@ -659,6 +566,7 @@ export async function postImage(payload) {
 
 async function runBatch() {
   const problems = [];
+  if (!tpl().trim()) problems.push(`The ${set.refMode ? "reference-image " : ""}template is empty: write one, or click “Defaults”.`);
   const { missing } = buildPrompt(tpl(), set.pools, set.locks);
   if (missing.length) problems.push(`No options for ${missing.map((s) => `{${s}}`).join(", ")}.`);
   if (!cfg.models.length) problems.push("Select at least one model.");
