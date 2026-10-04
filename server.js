@@ -403,8 +403,9 @@ async function groups(req, res) {
   await fs.mkdir(path.dirname(GROUPS_FILE), { recursive: true });
   await writeJsonAtomic(GROUPS_FILE, {
     active,
-    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs }) => ({
+    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs, version }) => ({
       id, name: name.trim(), created_at, template, pools, locks: locks || {},
+      version: typeof version === "string" ? version : undefined, // saved version last loaded or saved
       // Reference-image batches: their own template, whether that mode is on, and the reference files.
       refTemplate: refTemplate ?? undefined, refMode: !!refMode, refs: refs || [],
     })),
@@ -420,8 +421,19 @@ function poolSetPath(name) {
 
 async function poolSets(req, res, name) {
   if (!name) {
+    // Saved versions, oldest first: { name, created_at, saved_at }.
     const names = (await fs.readdir(POOL_DIR).catch(() => [])).filter((n) => n.endsWith(".json")).map((n) => n.slice(0, -5));
-    return sendJson(res, 200, { names: names.sort() });
+    const versions = [];
+    for (const n of names) {
+      try {
+        const v = JSON.parse(await fs.readFile(poolSetPath(n), "utf8"));
+        versions.push({ name: n, created_at: v.created_at || v.saved_at || null, saved_at: v.saved_at || null });
+      } catch {
+        console.error(`Skipping unreadable saved version ${n}`);
+      }
+    }
+    versions.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.name.localeCompare(b.name));
+    return sendJson(res, 200, { versions });
   }
   const file = poolSetPath(name);
   if (req.method === "GET") {
@@ -434,7 +446,13 @@ async function poolSets(req, res, name) {
     const { template, pools, locks, refTemplate } = await readJson(req);
     if (typeof template !== "string" || typeof pools !== "object" || !pools) throw httpError(400, "template and pools are required");
     await fs.mkdir(POOL_DIR, { recursive: true });
-    await writeJsonAtomic(file, { template, refTemplate: typeof refTemplate === "string" ? refTemplate : undefined, pools, locks: locks || {}, saved_at: new Date().toISOString() });
+    const now = new Date().toISOString();
+    const previous = await fs.readFile(file, "utf8").then(JSON.parse).catch(() => null);
+    await writeJsonAtomic(file, {
+      template, refTemplate: typeof refTemplate === "string" ? refTemplate : undefined, pools, locks: locks || {},
+      created_at: previous?.created_at || previous?.saved_at || now, // keep a version's place in the list when updating it
+      saved_at: now,
+    });
     return sendJson(res, 200, { ok: true });
   }
   if (req.method === "DELETE") {

@@ -25,7 +25,11 @@ let cfg = {
 let run = null;
 let selectedCaps = []; // capabilities of cfg.models, same order
 
-const saveSet = () => saveGroups();
+// Save the group (debounced) and refresh the "unsaved changes" marker.
+const saveSet = () => {
+  saveGroups();
+  renderVersionState();
+};
 const saveCfg = () => store.set("batch:cfg", cfg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,7 +45,7 @@ export function initBatch() {
   renderTemplateInfo();
   renderModelList();
   refreshSelection();
-  refreshPoolSetList();
+  refreshVersions();
   setSeedMode(cfg.seedMode);
 }
 
@@ -76,6 +80,8 @@ on("groups", () => {
   showMode();
   renderGroupBar(true);
   renderWarnings();
+  $("verConfirm").classList.add("hidden");
+  refreshVersions();
 });
 on("library", () => set && renderGroupBar());
 
@@ -311,56 +317,190 @@ $("unlockAll").onclick = () => {
   renderTemplateInfo();
 };
 
-// ---------- pool sets (saved on the server in data/pool-sets) ----------
-async function refreshPoolSetList(select) {
-  try {
-    const { names } = await api("/api/pool-sets");
-    $("poolSetSelect").innerHTML = optionsHtml(names, select ?? $("poolSetSelect").value, { blank: names.length ? "— saved sets —" : "no saved sets" });
-  } catch (e) {
-    toast("Could not list pool sets: " + e.message, true);
-  }
+// ---------- saved versions of the templates + slot pools (data/pool-sets) ----------
+// A version holds both templates, every slot pool and the locks. The group remembers which version it is on
+// (set.version); "unsaved changes" compares the working copy with that version as saved.
+let versions = []; // [{ name, created_at, saved_at }], oldest first
+const versionCache = new Map(); // name -> saved content
+let pendingSwitch = null; // version waiting on the unsaved-changes prompt
+
+// JSON with sorted keys, so key order never counts as a change.
+const stable = (v) =>
+  Array.isArray(v) ? `[${v.map(stable).join(",")}]`
+  : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`
+  : JSON.stringify(v ?? null);
+// What a version stores (blank options and empty pools don't count).
+const versionContent = (x) => ({
+  template: x.template ?? "",
+  refTemplate: x.refTemplate ?? null,
+  pools: Object.fromEntries(Object.entries(x.pools || {}).map(([k, v]) => [k, normalizeOptions(v)]).filter(([, v]) => v.length)),
+  locks: x.locks || {},
+});
+const knownVersion = () => versions.some((v) => v.name === set.version);
+const isDirty = () => {
+  if (!knownVersion()) return true;
+  const saved = versionCache.get(set.version);
+  if (!saved) return false;
+  const current = versionContent(set);
+  // Versions saved before reference templates existed don't cover one, so the group's own doesn't count.
+  if (saved.refTemplate == null) current.refTemplate = null;
+  return stable(current) !== stable(versionContent(saved));
+};
+
+async function fetchVersion(name) {
+  if (!versionCache.has(name)) versionCache.set(name, await api(`/api/pool-sets/${encodeURIComponent(name)}`));
+  return versionCache.get(name);
 }
-$("poolLoad").onclick = async () => {
-  const name = $("poolSetSelect").value;
-  if (!name) return;
+
+async function refreshVersions() {
   try {
-    const s = await api(`/api/pool-sets/${encodeURIComponent(name)}`);
-    Object.assign(set, { template: s.template, pools: s.pools, locks: s.locks || {} });
-    if (s.refTemplate != null) set.refTemplate = s.refTemplate;
-    if (set.refMode) ensureRefTemplate();
-    saveSet();
-    $("poolSetName").value = name;
-    showMode();
-    toast(`Loaded “${name}”.`);
+    versions = (await api("/api/pool-sets")).versions;
+    if (knownVersion()) await fetchVersion(set.version);
   } catch (e) {
-    toast(e.message, true);
+    toast("Could not list saved versions: " + e.message, true);
   }
-};
-$("poolSave").onclick = async () => {
-  const name = $("poolSetName").value.trim() || $("poolSetSelect").value;
-  if (!name) return toast("Type a name for the set first.", true);
-  try {
-    const pools = Object.fromEntries(Object.entries(set.pools).map(([k, v]) => [k, normalizeOptions(v)]));
-    await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "PUT", body: { ...set, pools } });
-    await refreshPoolSetList(name);
-    toast(`Saved “${name}”.`);
-  } catch (e) {
-    toast(e.message, true);
-  }
-};
-$("poolDelete").onclick = async () => {
-  const name = $("poolSetSelect").value;
-  if (!name) return;
-  if ($("poolDelete").dataset.confirm !== name) {
-    $("poolDelete").dataset.confirm = name;
-    $("poolDelete").textContent = "Click again to delete";
-    setTimeout(() => { delete $("poolDelete").dataset.confirm; $("poolDelete").textContent = "Delete"; }, 3000);
+  renderVersions();
+}
+
+const versionLabel = (v) =>
+  `${v.name} · ${new Date(v.saved_at || v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+
+// Neighbours for ‹ ›; from an unsaved working copy, ‹ goes to the newest and › to the oldest.
+function neighbours() {
+  const i = versions.findIndex((v) => v.name === set.version);
+  return i < 0 ? [versions.at(-1), versions[0]] : [versions[i - 1], versions[i + 1]];
+}
+
+function renderVersions() {
+  const known = knownVersion();
+  $("verSelect").innerHTML =
+    (known ? "" : `<option value="" selected>${versions.length ? "— not saved as a version —" : "no saved versions yet"}</option>`) +
+    versions.map((v) => `<option value="${escapeHtml(v.name)}" ${v.name === set.version ? "selected" : ""}>${escapeHtml(versionLabel(v))}</option>`).join("");
+  const [prev, next] = neighbours();
+  $("verPrev").disabled = !prev;
+  $("verNext").disabled = !next;
+  $("verSave").disabled = !known;
+  $("verDelete").disabled = !known;
+  renderVersionState();
+}
+
+function renderVersionState() {
+  if (!set || !$("verDirty")) return;
+  const text = !knownVersion() ? "● not saved as a version" : isDirty() ? "● unsaved changes" : "";
+  $("verDirty").textContent = text;
+  $("verDirty").classList.toggle("hidden", !text);
+}
+
+// Switch to a saved version; with unsaved changes, ask first.
+function requestVersion(name) {
+  if (!name || name === set.version) return;
+  if (isDirty()) {
+    pendingSwitch = name;
+    $("verConfirmText").textContent = knownVersion()
+      ? `“${set.version}” has unsaved changes.`
+      : "Your current template and pools aren't saved as a version.";
+    $("verConfirm").classList.remove("hidden");
+    renderVersions(); // put the dropdown back on the current version
     return;
   }
-  await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "DELETE" }).catch((e) => toast(e.message, true));
-  delete $("poolDelete").dataset.confirm;
-  $("poolDelete").textContent = "Delete";
-  refreshPoolSetList("");
+  applyVersion(name);
+}
+
+async function applyVersion(name) {
+  try {
+    const v = await fetchVersion(name);
+    Object.assign(set, { template: v.template, pools: structuredClone(v.pools), locks: structuredClone(v.locks || {}) });
+    if (v.refTemplate != null) set.refTemplate = v.refTemplate;
+    if (set.refMode) ensureRefTemplate();
+    set.version = name;
+    saveSet();
+    showMode();
+    renderVersions();
+    toast(`Loaded “${name}”.`);
+  } catch (e) {
+    toast(`Could not load “${name}”: ${e.message}`, true);
+  }
+}
+
+async function putVersion(name) {
+  $("verConfirm").classList.add("hidden");
+  pendingSwitch = null;
+  const body = versionContent(set);
+  await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "PUT", body });
+  versionCache.set(name, body);
+  set.version = name;
+  saveSet();
+}
+
+// "v4", or "v4 <label>" when a name is typed (letters, digits, spaces, - and _ only).
+function nextVersionName() {
+  const label = $("verName").value.replace(/[^\w\- ]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  let n = versions.length + 1;
+  const taken = (k) => versions.some((v) => v.name === `v${k}` || v.name.startsWith(`v${k} `));
+  while (taken(n)) n++;
+  return label ? `v${n} ${label}` : `v${n}`;
+}
+
+async function saveAsNewVersion() {
+  const name = nextVersionName();
+  try {
+    await putVersion(name);
+    $("verName").value = "";
+    await refreshVersions();
+    toast(`Saved as “${name}”.`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function saveCurrentVersion() {
+  if (!knownVersion()) return saveAsNewVersion();
+  try {
+    await putVersion(set.version);
+    await refreshVersions();
+    toast(`Saved “${set.version}”.`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+$("verSelect").onchange = () => requestVersion($("verSelect").value);
+$("verPrev").onclick = () => requestVersion(neighbours()[0]?.name);
+$("verNext").onclick = () => requestVersion(neighbours()[1]?.name);
+$("verSaveNew").onclick = saveAsNewVersion;
+$("verSave").onclick = saveCurrentVersion;
+$("verName").addEventListener("keydown", (e) => { if (e.key === "Enter") saveAsNewVersion(); });
+$("verConfirm").addEventListener("click", async (e) => {
+  const choice = e.target.closest("button")?.dataset.c;
+  if (!choice) return;
+  const target = pendingSwitch;
+  pendingSwitch = null;
+  $("verConfirm").classList.add("hidden");
+  if (choice === "save") {
+    await saveCurrentVersion();
+    applyVersion(target);
+  } else if (choice === "discard") applyVersion(target);
+});
+$("verDelete").onclick = async () => {
+  const name = set.version;
+  if (!knownVersion()) return;
+  if ($("verDelete").dataset.confirm !== name) {
+    $("verDelete").dataset.confirm = name;
+    $("verDelete").textContent = "Click again to delete";
+    setTimeout(() => { delete $("verDelete").dataset.confirm; $("verDelete").textContent = "Delete"; }, 3000);
+    return;
+  }
+  delete $("verDelete").dataset.confirm;
+  $("verDelete").textContent = "Delete";
+  $("verConfirm").classList.add("hidden");
+  try {
+    await api(`/api/pool-sets/${encodeURIComponent(name)}`, { method: "DELETE" });
+    versionCache.delete(name);
+    await refreshVersions(); // the working copy stays; it is now "not saved as a version"
+    toast(`Deleted “${name}”. Your current template and pools are unchanged.`);
+  } catch (e) {
+    toast(e.message, true);
+  }
 };
 $("poolReset").onclick = () => {
   if (set.refMode) {
@@ -374,7 +514,7 @@ $("poolReset").onclick = () => {
   }
   saveSet();
   showMode();
-  toast(`Restored the default ${set.refMode ? "reference-image template" : "template and pools"} (saved sets are unchanged).`);
+  toast(`Restored the default ${set.refMode ? "reference-image template" : "template and pools"} (saved versions are unchanged).`);
 };
 
 // ---------- models & run settings ----------
