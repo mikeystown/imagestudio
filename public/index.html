@@ -56,6 +56,8 @@
   .refs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
   .refs button { position: absolute; top: -6px; right: -6px; padding: 0 6px; font-size: 11px; border-radius: 99px; }
   .bigrefs img { width: 84px; height: 112px; cursor: zoom-in; }
+  .kindbadge { font-size: 12px; padding: 2px 8px; }
+  .kindbadge.on { background: var(--accent); color: var(--accent-text); }
   label.btnlike { border: 1px solid var(--border); background: var(--input); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
   .refs span { position: absolute; left: 4px; top: 2px; font-weight: 700; color: #fff; text-shadow: 0 0 3px #000; }
   main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -263,20 +265,23 @@
     <section class="panel">
       <div class="row between wrap" style="margin-bottom:8px">
         <span class="row">
-          <h2 style="margin:0" id="templateTitle">Template</h2>
-          <span class="seg" id="tplMode" title="Text only, or send reference images with every image in the batch">
-            <button type="button" data-mode="text" class="on">Text only</button>
-            <button type="button" data-mode="ref">With reference images</button>
-          </span>
+          <h2 style="margin:0">Template</h2>
+          <span class="badge kindbadge" id="templateKind" title="The version's type is set when it is created"></span>
         </span>
         <div class="row wrap" title="This group's versions of its templates, slot pools and locks. Edits save to the current version automatically.">
           <span class="desc">Version</span>
           <button type="button" id="verPrev" title="Previous version">‹</button>
           <select id="verSelect" style="width:auto;max-width:260px"></select>
+          <input type="text" id="verRenameInput" class="hidden" maxlength="60" style="width:220px" title="Enter to save, Esc to cancel">
           <button type="button" id="verNext" title="Next version">›</button>
+          <button type="button" id="verRename" title="Rename this version">Rename</button>
           <span class="desc" id="verCount"></span>
           <input type="text" id="verName" placeholder="new version name (optional)" maxlength="40" style="width:190px">
-          <button type="button" id="verAdd" title="Start a new, blank version">+ Add new version</button>
+          <select id="verKind" style="width:auto" title="Type of the new version">
+            <option value="text">Text only</option>
+            <option value="reference">With reference images</option>
+          </select>
+          <button type="button" id="verAdd" title="Start a new, blank version of the chosen type">+ Add new version</button>
           <button type="button" id="verDelete">Delete</button>
           <button type="button" id="poolReset" title="Fill this version with the default template and pools">Defaults</button>
         </div>

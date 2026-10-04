@@ -4,24 +4,20 @@ import { $, store, state, api, getCaps, randomSeed, escapeHtml, imgSrc, fmtCost,
 import { findSlots, buildPrompt, normalizeOptions } from "../lib/template.js";
 import { commonEnumValues, estimateImageCost } from "../lib/params.js";
 import { defaultPoolSet, DEFAULT_REF_TEMPLATE, DEFAULT_REF_POOLS } from "../lib/defaults.js";
-import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups, versionFields } from "./groups.js";
+import { activeGroup, groupList, createGroup, switchGroup, renameGroup, saveGroups, versionFields, pickSettings } from "./groups.js";
 import { openLightbox } from "./lightbox.js";
 
-// The active group (groups.js): { id, name, template, pools: {slot: [{value, weight}]}, locks: {slot: value},
-// refMode, refTemplate, refs }. Edits go straight into it and are saved to the server.
-// In reference mode (refMode) batches send the group's reference images (refs) and use refTemplate instead of
-// template; both templates draw on the same pools.
+// The active group (groups.js) mirrors its current version: { kind: "text" | "reference", template,
+// pools: {slot: [{value, weight}]}, locks: {slot: value}, settings, refs }. Edits go straight into it and are
+// saved to the server. A version's type is fixed when it is created; a reference version sends its reference
+// images (refs) with every image in the batch.
 let set = null;
 
-const tplKey = () => (set.refMode ? "refTemplate" : "template");
-const tpl = () => set[tplKey()] ?? "";
-const setTpl = (text) => (set[tplKey()] = text);
-// Slots used by either template: pools for the other template's slots are kept, not offered for removal.
-const slotsInUse = () => new Set([...findSlots(set.template ?? ""), ...findSlots(set.refTemplate ?? "")]);
-let cfg = {
-  models: [DEFAULT_MODEL], perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3,
-  ...store.get("batch:cfg", {}),
-};
+const isRef = () => set?.kind === "reference";
+const tpl = () => set.template ?? "";
+const setTpl = (text) => (set.template = text);
+const CFG_DEFAULTS = { models: [DEFAULT_MODEL], perModel: 4, resolution: "", aspect_ratio: "3:4", seedMode: "random", seed: "", concurrency: 3 };
+let cfg = { ...CFG_DEFAULTS, ...store.get("batch:cfg", {}) };
 let run = null;
 let selectedCaps = []; // capabilities of cfg.models, same order
 
@@ -30,23 +26,34 @@ const saveSet = () => {
   syncVersion();
   saveGroups();
 };
-const saveCfg = () => store.set("batch:cfg", cfg);
+// Settings save into the current version (and locally, for concurrency and as a fallback).
+const saveCfg = () => {
+  store.set("batch:cfg", cfg);
+  if (!set) return;
+  set.settings = pickSettings(cfg);
+  saveSet();
+};
+
+// Load the current version's run settings into the controls.
+function loadVersionSettings() {
+  // Defaults first, so a setting missing from this version never carries over from the previous one.
+  Object.assign(cfg, pickSettings(CFG_DEFAULTS), set.settings || {});
+  cfg.models = (cfg.models || []).filter((id) => state.models.some((m) => m.id === id));
+  $("perModel").value = cfg.perModel;
+  $("batchSeed").value = cfg.seed ?? "";
+  renderModelList();
+  refreshSelection();
+  setSeedMode(cfg.seedMode);
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function initBatch() {
   set = activeGroup();
   renderGroupBar();
-  cfg.models = cfg.models.filter((id) => state.models.some((m) => m.id === id));
   showMode();
-  $("perModel").value = cfg.perModel;
   $("concurrency").value = cfg.concurrency;
-  $("batchSeed").value = cfg.seed;
-  renderPools();
-  renderTemplateInfo();
-  renderModelList();
-  refreshSelection();
+  loadVersionSettings();
   renderVersions();
-  setSeedMode(cfg.seedMode);
 }
 
 // ---------- groups ----------
@@ -79,7 +86,7 @@ on("groups", () => {
   set = activeGroup();
   showMode();
   renderGroupBar(true);
-  renderWarnings();
+  loadVersionSettings();
   renderVersions();
 });
 on("library", () => set && renderGroupBar());
@@ -93,35 +100,25 @@ $("template").addEventListener("input", () => {
   renderTemplateInfo();
 });
 
-// ---------- mode: text only, or with reference images ----------
-// Show the current mode's template, pools and (in reference mode) the references panel.
+// ---------- version type: text only, or with reference images ----------
+// Show the template, its pools and, for reference versions, the references panel.
 function showMode() {
-  document.querySelectorAll("#tplMode button").forEach((b) => b.classList.toggle("on", (b.dataset.mode === "ref") === !!set.refMode));
-  $("refPanel").classList.toggle("hidden", !set.refMode);
-  $("templateTitle").textContent = set.refMode ? "Reference-image template" : "Template";
+  $("refPanel").classList.toggle("hidden", !isRef());
+  $("templateKind").textContent = isRef() ? "with reference images" : "text only";
+  $("templateKind").classList.toggle("on", isRef());
   $("template").value = tpl();
   renderPools();
   renderTemplateInfo();
   renderRefs();
 }
 
-function setRefMode(on) {
-  set.refMode = on;
-  if (on) ensureRefTemplate();
-  saveSet();
-  showMode();
-  renderWarnings();
+// Content for a version of the given type: blank, or that type's default template and pools.
+function freshContent(kind, { defaults = false } = {}) {
+  if (!defaults) return { kind, template: "", pools: {}, locks: {}, refs: [] };
+  return kind === "reference"
+    ? { kind, template: DEFAULT_REF_TEMPLATE, pools: structuredClone(DEFAULT_REF_POOLS), locks: {}, refs: [] }
+    : { kind, ...defaultPoolSet(), refs: [] };
 }
-
-// First switch to reference mode: start from the default reference template and add starter pools for its
-// slots, without touching pools the group already has.
-function ensureRefTemplate() {
-  set.refs ??= [];
-  if (set.refTemplate != null) return; // a version that has its own (possibly blank) reference template
-  set.refTemplate = DEFAULT_REF_TEMPLATE;
-  for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) if (!set.pools[slot]?.length) set.pools[slot] = structuredClone(opts);
-}
-document.querySelectorAll("#tplMode button").forEach((b) => (b.onclick = () => setRefMode(b.dataset.mode === "ref")));
 
 // ---------- reference images ----------
 function renderRefs() {
@@ -175,19 +172,23 @@ $("refUpload").onchange = async (e) => {
   e.target.value = "";
 };
 
-// "Use as batch reference" from Rate or Compare: add to the active group and switch to reference mode.
+// "Use as batch reference" from Rate or Compare: add to the current version if it takes references; otherwise
+// to this group's newest reference version, or a new one started from the default reference template.
 on("add-batch-ref", (file) => {
+  if (!isRef()) {
+    const target = [...(set.versions || [])].reverse().find((v) => v.kind === "reference");
+    if (target) switchVersion(target.id);
+    else addVersion("reference", { defaults: true });
+  }
   const added = addRefs([file]);
-  if (!set.refMode) setRefMode(true);
-  toast(added ? `Added to the batch references of “${set.name}” (reference mode is on).` : "Already a batch reference.");
+  toast(added ? `Added to the references of “${set.name}” › “${currentVersion().name}”.` : "Already a reference in this version.");
 });
 $("rePreview").onclick = () => renderTemplateInfo();
 
 function renderTemplateInfo() {
   const slots = findSlots(tpl());
   const { prompt, missing } = buildPrompt(tpl(), set.pools, set.locks);
-  const inUse = slotsInUse();
-  const unused = Object.keys(set.pools).filter((s) => !inUse.has(s));
+  const unused = Object.keys(set.pools).filter((s) => !slots.includes(s));
   const notes = [];
   if (missing.length) notes.push(`<span class="warn">No options for: ${missing.map((s) => `{${escapeHtml(s)}}`).join(", ")}</span>`);
   if (unused.length) notes.push(`Pools not used by the template: ${unused.map(escapeHtml).join(", ")}`);
@@ -198,10 +199,9 @@ function renderTemplateInfo() {
 
 // ---------- slot pools ----------
 function renderPools() {
-  // This template's slots, then pools no template uses (the other template's pools stay hidden).
+  // This template's slots, then pools it no longer uses (offered for removal).
   const slots = findSlots(tpl());
-  const inUse = slotsInUse();
-  const all = [...slots, ...Object.keys(set.pools).filter((s) => !inUse.has(s))];
+  const all = [...slots, ...Object.keys(set.pools).filter((s) => !slots.includes(s))];
   for (const s of slots) set.pools[s] ??= [];
   $("pools").innerHTML = all.map((slot) => {
     // Keep blank rows (a just-added option) in the editor; normalizeOptions drops them for picking.
@@ -329,9 +329,10 @@ function syncVersion() {
 }
 
 const versionLabel = (v) =>
-  `${v.name} · ${new Date(v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  `${v.name}${v.kind === "reference" ? " · with refs" : ""} · ${new Date(v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
 
 function renderVersions() {
+  showRename(false);
   const list = set.versions || [];
   const i = list.findIndex((v) => v.id === set.current);
   $("verSelect").innerHTML = list.map((v) => `<option value="${escapeHtml(v.id)}" ${v.id === set.current ? "selected" : ""}>${escapeHtml(versionLabel(v))}</option>`).join("");
@@ -347,9 +348,9 @@ function switchVersion(id) {
   syncVersion(); // already saved on every edit; this just makes sure
   set.current = id;
   Object.assign(set, versionFields(v));
-  if (set.refMode) ensureRefTemplate();
   saveGroups();
   showMode();
+  loadVersionSettings();
   renderVersions();
 }
 
@@ -360,13 +361,15 @@ function nextVersionName() {
   return label ? `v${n} ${label}` : `v${n}`;
 }
 
-$("verAdd").onclick = () => {
+// A new version of the given type (blank unless defaults), keeping the current run settings; switches to it.
+function addVersion(kind, { defaults = false } = {}) {
   syncVersion();
   const v = {
     id: `v-${Date.now().toString(36)}`,
     name: nextVersionName(),
     created_at: new Date().toISOString(),
-    template: "", refTemplate: "", pools: {}, locks: {}, // a blank version
+    ...freshContent(kind, { defaults }),
+    settings: pickSettings(cfg),
   };
   set.versions.push(v);
   set.current = v.id;
@@ -374,11 +377,51 @@ $("verAdd").onclick = () => {
   $("verName").value = "";
   saveGroups();
   showMode();
+  loadVersionSettings();
   renderVersions();
+  return v;
+}
+
+$("verAdd").onclick = () => {
+  const v = addVersion($("verKind").value);
   $("template").focus();
-  toast(`Started “${v.name}” (blank). “Defaults” fills in the default template if you want a starting point.`);
+  toast(`Started “${v.name}” (${v.kind === "reference" ? "with reference images" : "text only"}, blank). “Defaults” fills in the default template.`);
 };
 $("verName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("verAdd").click(); });
+
+// Rename: the dropdown becomes a text box; Enter or clicking away saves, Esc cancels.
+function showRename(on) {
+  $("verSelect").classList.toggle("hidden", on);
+  $("verRenameInput").classList.toggle("hidden", !on);
+  $("verRename").classList.toggle("hidden", on);
+}
+$("verRename").onclick = () => {
+  const v = currentVersion();
+  if (!v) return;
+  $("verRenameInput").value = v.name;
+  showRename(true);
+  $("verRenameInput").focus();
+  $("verRenameInput").select();
+};
+function commitVersionRename(save) {
+  if ($("verRenameInput").classList.contains("hidden")) return;
+  const v = currentVersion();
+  const name = $("verRenameInput").value.replace(/\s+/g, " ").trim().slice(0, 60);
+  showRename(false);
+  if (!save || !v || !name || name === v.name) return;
+  if (set.versions.some((x) => x !== v && x.name.toLowerCase() === name.toLowerCase()))
+    return toast(`This group already has a version called “${name}”.`, true);
+  const old = v.name;
+  v.name = name;
+  saveGroups();
+  renderVersions();
+  toast(`Renamed “${old}” to “${name}”.`);
+}
+$("verRenameInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") commitVersionRename(true);
+  else if (e.key === "Escape") commitVersionRename(false);
+});
+$("verRenameInput").addEventListener("blur", () => commitVersionRename(true));
 $("verSelect").onchange = () => switchVersion($("verSelect").value);
 $("verPrev").onclick = () => switchVersion(set.versions[set.versions.findIndex((v) => v.id === set.current) - 1]?.id);
 $("verNext").onclick = () => switchVersion(set.versions[set.versions.findIndex((v) => v.id === set.current) + 1]?.id);
@@ -399,29 +442,19 @@ $("verDelete").onclick = () => {
   const next = list[Math.min(i, list.length - 1)];
   set.current = next.id;
   Object.assign(set, versionFields(next));
-  if (set.refMode) ensureRefTemplate();
   saveGroups();
   showMode();
+  loadVersionSettings();
   renderVersions();
   toast(`Deleted “${v.name}”; now on “${next.name}”.`);
 };
 $("poolReset").onclick = () => {
-  if (set.refMode) {
-    // Reference mode: restore the reference template and its slots' starter options only.
-    set.refTemplate = DEFAULT_REF_TEMPLATE;
-    for (const [slot, opts] of Object.entries(DEFAULT_REF_POOLS)) set.pools[slot] = structuredClone(opts);
-    for (const slot of Object.keys(DEFAULT_REF_POOLS)) delete set.locks[slot];
-  } else {
-    // Keep pools only the reference template uses; everything else returns to the defaults.
-    const defaults = defaultPoolSet();
-    const refOnly = findSlots(set.refTemplate ?? "").filter((slot) => !(slot in defaults.pools) && set.pools[slot]);
-    const kept = Object.fromEntries(refOnly.map((slot) => [slot, set.pools[slot]]));
-    Object.assign(set, defaults);
-    Object.assign(set.pools, kept);
-  }
+  // This version's type's default template and pools; its reference images stay.
+  const { refs, ...content } = freshContent(set.kind, { defaults: true });
+  Object.assign(set, content);
   saveSet();
   showMode();
-  toast(`Filled “${currentVersion()?.name}” with the default ${set.refMode ? "reference-image template" : "template and pools"}.`);
+  toast(`Filled “${currentVersion()?.name}” with the default ${isRef() ? "reference-image" : "text"} template and pools.`);
 };
 
 // ---------- models & run settings ----------
@@ -467,13 +500,13 @@ async function refreshSelection() {
 
 // Reference mode: selected models that can't take this many reference images.
 const refsTooMany = () =>
-  set?.refMode ? cfg.models.filter((_, i) => (selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0) < (set.refs?.length ?? 0)) : [];
+  isRef() ? cfg.models.filter((_, i) => (selectedCaps[i]?.supported_parameters?.input_references?.max ?? 0) < (set.refs?.length ?? 0)) : [];
 
 function renderWarnings() {
   const warn = [];
-  if (set?.refMode) {
+  if (isRef()) {
     const n = set.refs?.length ?? 0;
-    if (!n) warn.push("⚠ Reference mode: add at least one reference image.");
+    if (!n) warn.push("⚠ This version uses reference images: add at least one.");
     const lacking = refsTooMany();
     if (lacking.length)
       warn.push(`⚠ Can't take ${n} reference image(s), so the batch won't run: ${lacking.map((id) => {
@@ -492,7 +525,7 @@ function renderWarnings() {
 
   let est = 0;
   let unknown = 0;
-  const refCount = set?.refMode ? set.refs?.length ?? 0 : 0;
+  const refCount = isRef() ? set.refs?.length ?? 0 : 0;
   cfg.models.forEach((_, i) => {
     const c = estimateImageCost(selectedCaps[i]?.pricing, cfg.resolution);
     if (c == null) unknown++;
@@ -515,10 +548,10 @@ $("batchSeed").oninput = () => { cfg.seed = $("batchSeed").value; saveCfg(); };
 
 function setSeedMode(mode) {
   cfg.seedMode = mode;
+  if (mode === "fixed" && $("batchSeed").value === "") $("batchSeed").value = cfg.seed = randomSeed();
   saveCfg();
   document.querySelectorAll("#batchSeedBox .seg button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
   $("batchSeed").disabled = mode === "random";
-  if (mode === "fixed" && $("batchSeed").value === "") $("batchSeed").value = cfg.seed = randomSeed();
   $("batchSeedNote").textContent = mode === "random"
     ? "Each image gets its own random seed (recorded with the image)."
     : "Every image uses this seed. Only the slot picks vary.";
@@ -538,7 +571,7 @@ function buildJobs(batchId, batchName) {
         prompt,
         app: { kind: "batch", template: tpl(), picks, batch_id: batchId, batch_name: batchName || undefined, group_id: set.id },
       };
-      if (set.refMode) {
+      if (isRef()) {
         payload.ref_files = [...set.refs]; // the server sends these as input_references and records them
         payload.app.mode = "reference";
       }
@@ -566,11 +599,11 @@ export async function postImage(payload) {
 
 async function runBatch() {
   const problems = [];
-  if (!tpl().trim()) problems.push(`The ${set.refMode ? "reference-image " : ""}template is empty: write one, or click “Defaults”.`);
+  if (!tpl().trim()) problems.push("The template is empty: write one, or click “Defaults”.");
   const { missing } = buildPrompt(tpl(), set.pools, set.locks);
   if (missing.length) problems.push(`No options for ${missing.map((s) => `{${s}}`).join(", ")}.`);
   if (!cfg.models.length) problems.push("Select at least one model.");
-  if (set.refMode && !set.refs?.length) problems.push("Reference mode needs at least one reference image.");
+  if (isRef() && !set.refs?.length) problems.push("This version uses reference images: add at least one.");
   if (refsTooMany().length) problems.push(`These models can't take ${set.refs.length} reference image(s): ${refsTooMany().map(modelName).join(", ")}. Remove references or untick them.`);
   if (cfg.seedMode === "fixed") {
     const s = Number(cfg.seed);

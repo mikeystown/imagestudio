@@ -375,6 +375,9 @@ async function stars(req, res, name) {
 }
 
 // ---------- groups: data/groups.json ----------
+// A version's type, if it has one yet (versions from before types get theirs when the app converts them).
+const kindOf = (k) => (k === "reference" || k === "text" ? k : undefined);
+
 // { active, groups: [{ id, name, created_at, template, pools, locks }] }. A group bundles a template with
 // its pools and every image generated while it was active. template null = not set up yet (client fills it).
 async function groups(req, res) {
@@ -395,10 +398,10 @@ async function groups(req, res) {
     if (typeof g.name !== "string" || !g.name.trim() || g.name.length > 80) throw httpError(400, "Group names must be 1–80 characters");
     if (g.template !== null && typeof g.template !== "string") throw httpError(400, "template must be a string");
     if (typeof g.pools !== "object" || !g.pools) throw httpError(400, "pools must be an object");
-    if (g.refTemplate != null && typeof g.refTemplate !== "string") throw httpError(400, "refTemplate must be a string");
     if (g.refs != null && (!Array.isArray(g.refs) || g.refs.some((f) => !outputPath(f)))) throw httpError(400, "refs must be output image names");
     if (g.versions != null) {
-      if (!Array.isArray(g.versions) || g.versions.some((v) => typeof v?.id !== "string" || typeof v.name !== "string" || typeof v.template !== "string" || typeof v.pools !== "object" || !v.pools))
+      if (!Array.isArray(g.versions) || g.versions.some((v) => typeof v?.id !== "string" || typeof v.name !== "string" || typeof v.template !== "string" || typeof v.pools !== "object" || !v.pools
+        || (v.refs != null && (!Array.isArray(v.refs) || v.refs.some((f) => !outputPath(f))))))
         throw httpError(400, "versions must be a list of { id, name, template, pools }");
       if (g.versions.length && !g.versions.some((v) => v.id === g.current)) throw httpError(400, "current must be one of the group's versions");
     }
@@ -408,13 +411,20 @@ async function groups(req, res) {
   await fs.mkdir(path.dirname(GROUPS_FILE), { recursive: true });
   await writeJsonAtomic(GROUPS_FILE, {
     active,
-    groups: list.map(({ id, name, created_at, template, pools, locks, refTemplate, refMode, refs, versions, current }) => ({
-      id, name: name.trim(), created_at, template, pools, locks: locks || {},
+    groups: list.map(({ id, name, created_at, kind, template, pools, locks, refs, versions, current, settings, refMode, refTemplate }) => ({
+      // The top-level fields mirror the current version.
+      id, name: name.trim(), created_at, kind: kindOf(kind), template, pools, locks: locks || {}, refs: refs || [],
+      // Old-format fields, kept until the app has converted them (see splitOldVersions in groups.js).
+      ...(refMode !== undefined && { refMode }), ...(refTemplate !== undefined && { refTemplate }),
+      settings: settings && typeof settings === "object" ? settings : undefined,
       // The group's versions of its templates/pools/locks; the fields above mirror the current one.
-      versions: versions?.map(({ id, name, created_at, template, refTemplate, pools, locks }) => ({ id, name, created_at, template, refTemplate: refTemplate ?? null, pools, locks: locks || {} })),
+      versions: versions?.map(({ id, name, created_at, kind, template, pools, locks, settings, refs, refTemplate }) => ({
+        id, name, created_at, kind: kindOf(kind), template, pools, locks: locks || {},
+        ...(refTemplate !== undefined && { refTemplate }), // old format, converted by the app
+        settings: settings && typeof settings === "object" ? settings : null, // models, images per model, resolution, aspect ratio, seed
+        refs: refs || [], // reference images (reference versions)
+      })),
       current: typeof current === "string" ? current : undefined,
-      // Reference-image batches: their own template, whether that mode is on, and the reference files.
-      refTemplate: refTemplate ?? undefined, refMode: !!refMode, refs: refs || [],
     })),
   });
   sendJson(res, 200, { ok: true });
