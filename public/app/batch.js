@@ -328,8 +328,10 @@ function syncVersion() {
   if (v) Object.assign(v, versionFields(set));
 }
 
-const versionLabel = (v) =>
-  `${v.name}${v.kind === "reference" ? " · with refs" : ""} · ${new Date(v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+// Reference versions are marked, unless the name already says so.
+const versionLabel = (v) => (v.kind === "reference" && !/with refs/i.test(v.name) ? `${v.name} · with refs` : v.name);
+const versionDate = (v) =>
+  v?.created_at ? `created ${new Date(v.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "";
 
 function renderVersions() {
   showRename(false);
@@ -340,6 +342,7 @@ function renderVersions() {
   $("verNext").disabled = i < 0 || i >= list.length - 1;
   $("verDelete").disabled = list.length <= 1;
   $("verCount").textContent = list.length > 1 ? `${i + 1} of ${list.length}` : "";
+  $("verDate").textContent = versionDate(list[i]);
 }
 
 function switchVersion(id) {

@@ -57,6 +57,8 @@
   .refs button { position: absolute; top: -6px; right: -6px; padding: 0 6px; font-size: 11px; border-radius: 99px; }
   .bigrefs img { width: 84px; height: 112px; cursor: zoom-in; }
   .kindbadge { font-size: 12px; padding: 2px 8px; }
+  .vercol { display: inline-flex; flex-direction: column; gap: 1px; }
+  .verdate { font-size: 11px; line-height: 1.2; color: var(--muted); opacity: .8; padding-left: 4px; }
   .kindbadge.on { background: var(--accent); color: var(--accent-text); }
   label.btnlike { border: 1px solid var(--border); background: var(--input); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
   .refs span { position: absolute; left: 4px; top: 2px; font-weight: 700; color: #fff; text-shadow: 0 0 3px #000; }
@@ -271,8 +273,11 @@
         <div class="row wrap" title="This group's versions of its templates, slot pools and locks. Edits save to the current version automatically.">
           <span class="desc">Version</span>
           <button type="button" id="verPrev" title="Previous version">‹</button>
-          <select id="verSelect" style="width:auto;max-width:260px"></select>
-          <input type="text" id="verRenameInput" class="hidden" maxlength="60" style="width:220px" title="Enter to save, Esc to cancel">
+          <span class="vercol">
+            <select id="verSelect" style="width:auto;max-width:260px"></select>
+            <input type="text" id="verRenameInput" class="hidden" maxlength="60" style="width:220px" title="Enter to save, Esc to cancel">
+            <span class="verdate" id="verDate"></span>
+          </span>
           <button type="button" id="verNext" title="Next version">›</button>
           <button type="button" id="verRename" title="Rename this version">Rename</button>
           <span class="desc" id="verCount"></span>
